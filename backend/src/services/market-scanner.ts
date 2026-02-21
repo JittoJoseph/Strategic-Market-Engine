@@ -69,10 +69,17 @@ export class MarketScanner extends EventEmitter {
     const windowConfig = WINDOW_CONFIGS[config.strategy.marketWindow];
 
     try {
+      // Only fetch events whose endDate is >= 30 seconds ago.
+      // This excludes old unresolved markets (Polymarket keeps them as
+      // active=true/closed=false indefinitely until oracle settlement) while
+      // always including the current trading window.
+      const endDateMin = new Date(Date.now() - 30_000).toISOString();
+
       const events = await this.client.getEvents({
         tag_slug: windowConfig.tagSlug,
         active: true,
         closed: false,
+        end_date_min: endDateMin,
         limit: 50,
       });
 

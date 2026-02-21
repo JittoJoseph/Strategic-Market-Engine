@@ -315,6 +315,22 @@ function BtcStatusPanel({
 
   return (
     <div className="border border-border/30 rounded-lg bg-card/30 overflow-hidden">
+      {/* Active market question strip */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border/20 bg-card/20 min-h-[32px]">
+        {primaryMarket ? (
+          <>
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+            <span className="text-xs font-mono text-muted-foreground truncate">
+              {primaryMarket.question}
+            </span>
+          </>
+        ) : (
+          <span className="text-xs font-mono text-muted-foreground/50">
+            Waiting for active market…
+          </span>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 p-4 min-h-[140px]">
         {/* BTC PRICE */}
         <div className="col-span-1 lg:col-span-4 bg-gradient-to-br from-card/40 to-card/20 rounded-xl border border-border/20 p-3 lg:p-4 flex flex-col justify-center items-center relative overflow-hidden">

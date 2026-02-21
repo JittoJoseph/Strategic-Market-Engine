@@ -242,6 +242,21 @@ export class MarketOrchestrator extends EventEmitter {
 
     const endDate = market.endDate ? new Date(market.endDate) : new Date();
 
+    // Safety guard: skip markets whose trading window has already closed.
+    // The Gamma API may return markets with active=true/closed=false even when
+    // their endDate is months in the past (awaiting oracle resolution).
+    if (endDate.getTime() < Date.now()) {
+      logger.debug(
+        {
+          marketId: market.id,
+          endDate: endDate.toISOString(),
+          question: market.question,
+        },
+        "Skipping expired market (endDate in the past)",
+      );
+      return;
+    }
+
     const state: ActiveMarketState = {
       marketId: market.id,
       yesTokenId: tokenIds[0]!,

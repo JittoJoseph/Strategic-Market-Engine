@@ -89,6 +89,8 @@ export class PolymarketClient {
       active?: boolean;
       tag_slug?: string;
       slug?: string;
+      /** ISO-8601 datetime — only return events whose endDate >= this value */
+      end_date_min?: string;
     } = {},
   ): Promise<GammaEvent[]> {
     return withRetry(
@@ -101,6 +103,7 @@ export class PolymarketClient {
         if (options.active !== undefined) params.active = options.active;
         if (options.tag_slug) params.tag_slug = options.tag_slug;
         if (options.slug) params.slug = options.slug;
+        if (options.end_date_min) params.end_date_min = options.end_date_min;
 
         logger.debug({ params }, "Fetching events from Gamma API");
         const response = await this.gammaApi.get("/events", { params });

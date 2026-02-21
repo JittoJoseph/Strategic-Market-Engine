@@ -9,7 +9,7 @@ import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import { getDb } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, gte } from "drizzle-orm";
 import { getMarketOrchestrator } from "./market-orchestrator.js";
 import { getBtcPriceWatcher } from "./btc-price-watcher.js";
 import {
@@ -153,15 +153,23 @@ export class ApiServer {
       }
     });
 
-    // Active markets
+    // Active markets — only return markets whose trading window ends in the future
+    // (DB may contain old markets with active=true awaiting oracle settlement)
     this.app.get("/api/active-market", async (_req, res) => {
       try {
         const db = getDb();
+        // Allow up to 60 seconds in the past to account for clock skew / resolution lag
+        const cutoff = new Date(Date.now() - 60_000).toISOString();
         const markets = await db
           .select()
           .from(schema.markets)
-          .where(eq(schema.markets.active, true))
-          .orderBy(desc(schema.markets.updatedAt))
+          .where(
+            and(
+              eq(schema.markets.active, true),
+              gte(schema.markets.endDate, cutoff),
+            ),
+          )
+          .orderBy(desc(schema.markets.endDate))
           .limit(20);
         res.json(markets);
       } catch (error) {
