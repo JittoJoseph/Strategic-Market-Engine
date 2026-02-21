@@ -36,7 +36,7 @@ export function loadConfig(): Config {
       maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 5),
       resolutionWatchMinutes: envNum("RESOLUTION_WATCH_MINUTES", 5),
       minBtcDistanceUsd: envNum("MIN_BTC_DISTANCE_USD", 50),
-      scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60000),
+      scanIntervalMs: envNum("SCAN_INTERVAL_MS", 30000),
     },
     stopLoss: {
       threshold: envNum("STOP_LOSS_THRESHOLD", 0.5),

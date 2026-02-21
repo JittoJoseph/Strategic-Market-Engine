@@ -240,9 +240,9 @@ export class MarketOrchestrator extends EventEmitter {
 
   private wireEvents(): void {
     // Scanner → new market discovered
-    this.scanner.on("newMarket", async ({ market, event }) => {
+    this.scanner.on("newMarket", async ({ market }) => {
       try {
-        await this.onNewMarket(market, event);
+        await this.onNewMarket(market);
       } catch (err) {
         logger.error(
           { err, marketId: market?.id },
@@ -305,7 +305,7 @@ export class MarketOrchestrator extends EventEmitter {
   /**
    * Handle a newly discovered market from the scanner.
    */
-  private async onNewMarket(market: any, event: any): Promise<void> {
+  private async onNewMarket(market: any): Promise<void> {
     if (this.paused) return;
     if (this.activeMarkets.has(market.id)) return;
 

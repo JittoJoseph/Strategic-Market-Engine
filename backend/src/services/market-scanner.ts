@@ -3,8 +3,8 @@ import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import {
   WINDOW_CONFIGS,
-  type GammaEvent,
   type GammaMarket,
+  type WindowConfig,
 } from "../types/index.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { insertMarketIfNew } from "../db/client.js";
@@ -12,20 +12,31 @@ import { insertMarketIfNew } from "../db/client.js";
 const logger = createModuleLogger("market-scanner");
 
 /**
- * Discovers BTC markets for the configured window type from Polymarket Gamma API.
+ * Discovers BTC markets for the configured window type from Polymarket.
+ *
+ * Uses **deterministic slug computation** to always find the correct markets.
+ * BTC 5-minute window slugs follow the pattern:
+ *   btc-updown-5m-{UNIX_TIMESTAMP}
+ * where UNIX_TIMESTAMP is the window START time (seconds), aligned to round
+ * 5-minute boundaries:
+ *   windowStart = Math.floor(now / 300) * 300
+ *
+ * On every scan cycle we compute the current + next N window slugs, fetch those
+ * exact markets from the Gamma /markets API, catalog them in the DB, and emit
+ * them for the orchestrator.  The orchestrator deduplicates via its own
+ * activeMarkets Map — no in-memory knownMarketIds set needed here.
  *
  * Emits:
- *   "newMarket" — { market: GammaMarket, event: GammaEvent }
- *
- * Deduplication: tracks discovered market IDs in-memory so each market is
- * emitted and written to the DB exactly once.
+ *   "newMarket" — { market: GammaMarket }
  */
 export class MarketScanner extends EventEmitter {
   private client: PolymarketClient;
   private scanInterval: ReturnType<typeof setInterval> | null = null;
-  private knownMarketIds: Set<string> = new Set();
   private discoveredCount = 0;
   private running = false;
+
+  /** How many future windows to pre-fetch alongside the current one */
+  private static readonly LOOKAHEAD_WINDOWS = 3;
 
   constructor() {
     super();
@@ -40,8 +51,14 @@ export class MarketScanner extends EventEmitter {
     const windowConfig = WINDOW_CONFIGS[config.strategy.marketWindow];
 
     logger.info(
-      { window: config.strategy.marketWindow, tagSlug: windowConfig.tagSlug },
-      "Starting market scanner",
+      {
+        window: config.strategy.marketWindow,
+        slugPrefix: windowConfig.slugPrefix,
+        durationMs: windowConfig.durationMs,
+        scanIntervalMs: config.strategy.scanIntervalMs,
+        lookahead: MarketScanner.LOOKAHEAD_WINDOWS,
+      },
+      "Starting market scanner (deterministic slug mode)",
     );
 
     // Initial scan
@@ -68,87 +85,69 @@ export class MarketScanner extends EventEmitter {
     return this.discoveredCount;
   }
 
+  /**
+   * Compute deterministic window-start timestamps for the current + upcoming
+   * windows.  For 5M windows: floor(now / 300) * 300 = current window start.
+   */
+  private computeWindowSlugs(windowConfig: WindowConfig): string[] {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const durationSeconds = windowConfig.durationMs / 1000;
+    const currentWindowStart =
+      Math.floor(nowSeconds / durationSeconds) * durationSeconds;
+
+    const slugs: string[] = [];
+    for (let i = 0; i < MarketScanner.LOOKAHEAD_WINDOWS; i++) {
+      const windowStart = currentWindowStart + i * durationSeconds;
+      slugs.push(`${windowConfig.slugPrefix}-${windowStart}`);
+    }
+    return slugs;
+  }
+
   async scan(): Promise<void> {
     const config = getConfig();
     const windowConfig = WINDOW_CONFIGS[config.strategy.marketWindow];
 
     try {
-      // Only fetch events whose endDate is >= 30 seconds ago.
-      // This excludes old unresolved markets (Polymarket keeps them as
-      // active=true/closed=false indefinitely until oracle settlement) while
-      // always including the current trading window.
-      const endDateMin = new Date(Date.now() - 30_000).toISOString();
+      const slugs = this.computeWindowSlugs(windowConfig);
 
-      const events = await this.client.getEvents({
-        tag_slug: windowConfig.tagSlug,
-        active: true,
-        closed: false,
-        end_date_min: endDateMin,
-        limit: 50,
-      });
+      logger.debug({ slugs }, "Scanning for markets by deterministic slugs");
+
+      const markets = await this.client.getMarkets({ slug: slugs });
 
       let newMarketsFound = 0;
 
-      for (const event of events) {
-        if (!this.isBtcWindowEvent(event, windowConfig)) continue;
+      for (const market of markets) {
+        // Verify this is actually a market for our configured window type
+        if (!market.slug?.startsWith(windowConfig.slugPrefix)) continue;
 
-        for (const market of event.markets ?? []) {
-          // Skip markets we've already processed in a previous scan
-          if (this.knownMarketIds.has(market.id)) continue;
+        // Skip already-closed markets (resolved by oracle)
+        if (market.closed) continue;
 
-          const wasNew = await this.catalogMarket(market, windowConfig);
-          this.knownMarketIds.add(market.id);
-
-          if (wasNew) {
-            newMarketsFound++;
-            this.discoveredCount++;
-            this.emit("newMarket", { market, event });
-          }
+        // Catalog into DB (idempotent — INSERT ON CONFLICT DO NOTHING)
+        const wasNew = await this.catalogMarket(market, windowConfig);
+        if (wasNew) {
+          this.discoveredCount++;
+          newMarketsFound++;
         }
+
+        // Always emit — orchestrator deduplicates via activeMarkets.has()
+        this.emit("newMarket", { market });
       }
 
       if (newMarketsFound > 0) {
         logger.info(
-          { newMarketsFound, total: this.discoveredCount },
+          { newMarketsFound, total: this.discoveredCount, slugs },
           "Scan complete — new markets found",
         );
       } else {
-        logger.debug("Scan complete — no new markets");
+        logger.debug(
+          { returned: markets.length, slugs },
+          "Scan complete — no new markets",
+        );
       }
     } catch (error) {
       logger.error({ error }, "Market scan failed");
     }
-  }
-
-  /**
-   * Check if a Gamma event is a BTC event for our configured window.
-   */
-  private isBtcWindowEvent(
-    event: GammaEvent,
-    windowConfig: (typeof WINDOW_CONFIGS)[keyof typeof WINDOW_CONFIGS],
-  ): boolean {
-    const slug = event.slug ?? "";
-    const seriesSlug = event.seriesSlug ?? "";
-
-    // Match by slug prefix or series slug
-    if (
-      slug.startsWith(windowConfig.slugPrefix) ||
-      seriesSlug === windowConfig.seriesSlug
-    ) {
-      return true;
-    }
-
-    // Also check if "btc" appears in slug/title as fallback
-    const title = event.title?.toLowerCase() ?? "";
-    const hasbtc =
-      slug.includes("btc") ||
-      title.includes("btc") ||
-      title.includes("bitcoin");
-    const hasWindow =
-      slug.includes(windowConfig.slugPrefix) ||
-      seriesSlug.includes(windowConfig.seriesSlug);
-
-    return hasbtc && hasWindow;
   }
 
   /**
@@ -157,7 +156,7 @@ export class MarketScanner extends EventEmitter {
    */
   private async catalogMarket(
     market: GammaMarket,
-    windowConfig: (typeof WINDOW_CONFIGS)[keyof typeof WINDOW_CONFIGS],
+    windowConfig: WindowConfig,
   ): Promise<boolean> {
     try {
       const tokenIds = PolymarketClient.parseClobTokenIds(market);

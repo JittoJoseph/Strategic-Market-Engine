@@ -115,6 +115,60 @@ export class PolymarketClient {
     );
   }
 
+  /**
+   * Fetch markets from the Gamma /markets endpoint.
+   * Supports slug array for deterministic lookups:
+   *   getMarkets({ slug: ["btc-updown-5m-1771705500", "btc-updown-5m-1771705800"] })
+   */
+  async getMarkets(
+    options: {
+      slug?: string[];
+      active?: boolean;
+      closed?: boolean;
+      end_date_min?: string;
+      end_date_max?: string;
+      order?: string;
+      ascending?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<GammaMarket[]> {
+    return withRetry(
+      async () => {
+        // Use URLSearchParams for proper multi-value slug support (slug=a&slug=b)
+        const params = new URLSearchParams();
+        if (options.limit !== undefined)
+          params.append("limit", options.limit.toString());
+        if (options.offset !== undefined)
+          params.append("offset", options.offset.toString());
+        if (options.active !== undefined)
+          params.append("active", options.active.toString());
+        if (options.closed !== undefined)
+          params.append("closed", options.closed.toString());
+        if (options.order) params.append("order", options.order);
+        if (options.ascending !== undefined)
+          params.append("ascending", options.ascending.toString());
+        if (options.end_date_min)
+          params.append("end_date_min", options.end_date_min);
+        if (options.end_date_max)
+          params.append("end_date_max", options.end_date_max);
+        for (const slug of options.slug ?? []) {
+          params.append("slug", slug);
+        }
+
+        logger.debug(
+          { slugCount: options.slug?.length, params: params.toString() },
+          "Fetching markets from Gamma API",
+        );
+        const response = await this.gammaApi.get("/markets", { params });
+        const markets = z.array(GammaMarketSchema).parse(response.data);
+        logger.debug({ count: markets.length }, "Fetched markets");
+        return markets;
+      },
+      { maxRetries: 3, retryOn: isRateLimitError },
+    );
+  }
+
   async getMarketById(marketId: string): Promise<GammaMarket | null> {
     return withRetry(
       async () => {
