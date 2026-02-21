@@ -309,7 +309,8 @@ export class MarketOrchestrator extends EventEmitter {
 
     // Capture current BTC price as the "price to beat" for relative Up/Down markets.
     // For absolute price markets (above/below $X), targetPrice takes precedence.
-    const btcPriceAtWindowStart = this.btcWatcher.getCurrentPrice()?.price ?? null;
+    const btcPriceAtWindowStart =
+      this.btcWatcher.getCurrentPrice()?.price ?? null;
 
     const state: ActiveMarketState = {
       marketId: market.id,

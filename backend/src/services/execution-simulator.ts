@@ -174,9 +174,9 @@ function calculateFeePerShare(price: number, feeRateBps: number): number {
   // Gate: if feeRateBps is 0 this is a fee-free market
   if (feeRateBps <= 0) return 0;
 
-  const feeRate = CRYPTO_FEE.RATE;     // 0.25 for 5M/15M crypto
+  const feeRate = CRYPTO_FEE.RATE; // 0.25 for 5M/15M crypto
   const exponent = CRYPTO_FEE.EXPONENT; // 2 for 5M/15M crypto
-  const pq = price * (1 - price);       // p × (1-p), maximised at p=0.5
+  const pq = price * (1 - price); // p × (1-p), maximised at p=0.5
   const fee = feeRate * Math.pow(pq, exponent);
 
   // Round to 4 decimal places (Polymarket precision; sub-0.0001 rounds to 0)

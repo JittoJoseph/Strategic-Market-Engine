@@ -95,13 +95,15 @@ export function useLiveMarkets(): LiveMarketInfo[] {
       .getActiveMarket()
       .then((market) => {
         if (!cancelled && market) {
-          setLiveMarkets((prev) =>
-            prev.length === 0 ? [market] : prev,
-          );
+          setLiveMarkets((prev) => (prev.length === 0 ? [market] : prev));
         }
       })
-      .catch(() => {/* silently skip if backend not ready */});
-    return () => { cancelled = true; };
+      .catch(() => {
+        /* silently skip if backend not ready */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

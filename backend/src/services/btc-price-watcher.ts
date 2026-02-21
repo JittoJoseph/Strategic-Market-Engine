@@ -10,10 +10,7 @@ const logger = createModuleLogger("btc-price-watcher");
  * Real-time BTC price watcher via Polymarket RTDS WebSocket.
  * Endpoint: wss://ws-live-data.polymarket.com
  *
- * Subscribes to both RTDS price sources without server-side filters
- * (filtering in code is more robust than relying on server-side filter strings):
- *   - Binance:   topic="crypto_prices",           filters btcusdt in handler
- *   - Chainlink: topic="crypto_prices_chainlink",  filters btc/usd in handler
+ * Subscribes to: topic="crypto_prices_chainlink" (Chainlink btc/usd)
  *
  * Keepalive: sends TEXT "PING" every 5 s per Polymarket RTDS docs.
  * Reconnects with exponential back-off on any disconnect/error.
@@ -89,29 +86,18 @@ export class BtcPriceWatcher extends EventEmitter {
         logger.info("RTDS WebSocket connected");
         this.reconnectAttempt = 0;
 
-        // Subscribe to BOTH Binance and Chainlink topics.
-        // We intentionally omit the "filters" field on the Binance topic —
-        // subscribing to all symbols and filtering in code is more robust;
-        // server-side filters can silently fail without a connection drop.
+        // Subscribe to Chainlink topic for BTC/USD price.
         const subscribeMsg = JSON.stringify({
           action: "subscribe",
           subscriptions: [
             {
-              topic: "crypto_prices",
-              type: "update",
-              // no "filters" → receive ALL symbols (btcusdt, ethusdt, solusdt, xrpusdt)
-            },
-            {
               topic: "crypto_prices_chainlink",
               type: "*",
-              // no "filters" → receive all Chainlink symbols
             },
           ],
         });
         this.ws!.send(subscribeMsg);
-        logger.debug(
-          "RTDS subscribed: crypto_prices (Binance) + crypto_prices_chainlink (Chainlink)",
-        );
+        logger.debug("RTDS subscribed: crypto_prices_chainlink (Chainlink)");
 
         // Keepalive: send TEXT "PING" every 5 s per Polymarket RTDS docs
         this.pingTimer = setInterval(() => {
@@ -128,25 +114,7 @@ export class BtcPriceWatcher extends EventEmitter {
 
           const msg = JSON.parse(text) as Record<string, unknown>;
           const topic = msg["topic"] as string | undefined;
-          const type = msg["type"] as string | undefined;
           const payload = msg["payload"] as Record<string, unknown> | undefined;
-
-          // ── Binance source ──────────────────────────────────────────────
-          // topic = "crypto_prices", type = "update"
-          // payload.symbol = "btcusdt", payload.value = 95123.45
-          if (topic === "crypto_prices" && type === "update") {
-            if (
-              payload?.["symbol"] === "btcusdt" &&
-              typeof payload["value"] === "number"
-            ) {
-              const ts =
-                typeof payload["timestamp"] === "number"
-                  ? (payload["timestamp"] as number)
-                  : (msg["timestamp"] as number) ?? Date.now();
-              this.setPrice(payload["value"] as number, ts);
-              return;
-            }
-          }
 
           // ── Chainlink source ────────────────────────────────────────────
           // topic = "crypto_prices_chainlink"
@@ -159,7 +127,7 @@ export class BtcPriceWatcher extends EventEmitter {
               const ts =
                 typeof payload["timestamp"] === "number"
                   ? (payload["timestamp"] as number)
-                  : (msg["timestamp"] as number) ?? Date.now();
+                  : ((msg["timestamp"] as number) ?? Date.now());
               this.setPrice(payload["value"] as number, ts);
               return;
             }
