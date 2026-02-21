@@ -117,7 +117,9 @@ export function DashboardPage() {
           btcPrice={currentBtcPrice}
           primaryMarket={primaryMarket}
           positionMarkets={positionMarkets}
-          activeMarketsCount={liveMarkets.filter((m) => m.status === "ACTIVE").length}
+          activeMarketsCount={
+            liveMarkets.filter((m) => m.status === "ACTIVE").length
+          }
           openTradesCount={openTrades.length}
           windowLabel={windowLabel}
           mounted={mounted}
@@ -433,7 +435,10 @@ function BtcStatusPanel({
           {/* Countdown timer — prominent */}
           <div
             className={`rounded-lg border p-3 flex items-center justify-between ${
-              countdown && !countdown.expired && countdown.hours === 0 && countdown.minutes < 1
+              countdown &&
+              !countdown.expired &&
+              countdown.hours === 0 &&
+              countdown.minutes < 1
                 ? "border-red-500/40 bg-red-500/10"
                 : countdown?.expired
                   ? "border-amber-500/40 bg-amber-500/10"
@@ -447,9 +452,7 @@ function BtcStatusPanel({
               className={`text-xl font-bold font-mono tabular-nums ${
                 countdown?.expired
                   ? "text-amber-400"
-                  : countdown &&
-                      countdown.hours === 0 &&
-                      countdown.minutes < 1
+                  : countdown && countdown.hours === 0 && countdown.minutes < 1
                     ? "text-red-400 animate-pulse"
                     : "text-foreground"
               }`}
@@ -745,7 +748,8 @@ function MarketsPanel({
             // local calculation
             const status: "ACTIVE" | "ENDED" = market.computedStatus
               ? market.computedStatus
-              : market.endDate && new Date(market.endDate).getTime() > Date.now()
+              : market.endDate &&
+                  new Date(market.endDate).getTime() > Date.now()
                 ? "ACTIVE"
                 : "ENDED";
 
