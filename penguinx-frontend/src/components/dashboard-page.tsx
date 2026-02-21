@@ -373,12 +373,18 @@ function TopDashboardSection({
   const marketDetails = useMemo(() => {
     if (!primaryMarket) return null;
     const question = primaryMarket.question;
-    // Extract target price: look for $XX,XXX or $XX,XXX.XX
-    const priceMatch = question.match(/\$([0-9,]+(\.[0-9]+)?)/);
-    const targetPriceStr = priceMatch ? priceMatch[0] : null;
-    const targetPriceNum = priceMatch
-      ? parseFloat(priceMatch[1].replace(/,/g, ""))
-      : null;
+
+    // For absolute price markets ("above $X") extract the target from the question.
+    // For relative Up/Down markets, btcPriceAtWindowStart is the price to beat.
+    const absolutePriceMatch = question.match(/(?:above|below)\s*\$([0-9,]+(?:\.\d+)?)/i);
+    const targetPriceStr = absolutePriceMatch
+      ? `$${absolutePriceMatch[1]}`
+      : primaryMarket.btcPriceAtWindowStart !== null
+        ? `$${primaryMarket.btcPriceAtWindowStart.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : null;
+    const targetPriceNum = absolutePriceMatch
+      ? parseFloat(absolutePriceMatch[1].replace(/,/g, ""))
+      : (primaryMarket.btcPriceAtWindowStart ?? null);
 
     const end = new Date(primaryMarket.endDate);
     const windowMinMap: Record<string, number> = {
@@ -505,11 +511,14 @@ function TopDashboardSection({
                 <div className="grid grid-cols-2 divide-x divide-border/30">
                   <div className="p-3">
                     <div className="text-[10px] font-mono text-muted-foreground mb-1 tracking-widest">
-                      PRICE TO BEAT
+                      {primaryMarket.btcPriceAtWindowStart !== null ? "BTC AT START" : "PRICE TO BEAT"}
                     </div>
                     <div className="text-base font-bold font-mono tabular-nums text-foreground">
                       {marketDetails?.targetPriceStr ?? "—"}
                     </div>
+                    {primaryMarket.btcPriceAtWindowStart !== null && (
+                      <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">window open price</div>
+                    )}
                   </div>
                   <div className="p-3">
                     <div className="flex items-center gap-1.5 mb-1">

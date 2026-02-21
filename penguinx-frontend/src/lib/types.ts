@@ -58,6 +58,8 @@ export interface LiveMarketInfo {
   prices: Record<string, LiveMarketPrice>;
   status: "ACTIVE" | "ENDED";
   hasPosition: boolean;
+  /** BTC price captured when the market window opened — the "price to beat" for Up/Down markets */
+  btcPriceAtWindowStart: number | null;
 }
 
 // ============================================

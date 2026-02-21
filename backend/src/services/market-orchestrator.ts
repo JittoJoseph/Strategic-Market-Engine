@@ -48,6 +48,10 @@ interface ActiveMarketState {
   slug: string | null;
   endDate: Date;
   targetPrice: number | null;
+  /** BTC spot price captured at the moment this market was first registered.
+   *  For Up/Down relative markets this IS the "price to beat" — the window
+   *  resolves UP if BTC ends >= this value, DOWN otherwise. */
+  btcPriceAtWindowStart: number | null;
   outcomes: string[];
   lastPrices: Record<string, { bid: number; ask: number; mid: number }>;
   subscribedWs: boolean;
@@ -224,6 +228,7 @@ export class MarketOrchestrator extends EventEmitter {
           prices: { ...m.lastPrices },
           status,
           hasPosition,
+          btcPriceAtWindowStart: m.btcPriceAtWindowStart,
         };
       });
   }
@@ -302,6 +307,10 @@ export class MarketOrchestrator extends EventEmitter {
       return;
     }
 
+    // Capture current BTC price as the "price to beat" for relative Up/Down markets.
+    // For absolute price markets, targetPrice takes precedence.
+    const btcPriceAtWindowStart = this.btcWatcher.getCurrentPrice()?.price ?? null;
+
     const state: ActiveMarketState = {
       marketId: market.id,
       yesTokenId: tokenIds[0]!,
@@ -310,6 +319,7 @@ export class MarketOrchestrator extends EventEmitter {
       slug: market.slug ?? null,
       endDate,
       targetPrice,
+      btcPriceAtWindowStart,
       outcomes,
       lastPrices: {},
       subscribedWs: false,
