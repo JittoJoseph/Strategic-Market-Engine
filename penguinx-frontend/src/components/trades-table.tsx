@@ -65,9 +65,6 @@ export function TradesTable({
               SHARES
             </th>
             <th className="text-right py-2.5 px-3 font-medium text-muted-foreground tracking-wider text-[10px]">
-              BTC DIST
-            </th>
-            <th className="text-right py-2.5 px-3 font-medium text-muted-foreground tracking-wider text-[10px]">
               P&L
             </th>
             <th className="text-right py-2.5 px-3 font-medium text-muted-foreground tracking-wider text-[10px]">
@@ -81,6 +78,7 @@ export function TradesTable({
             const entryCents = Math.round(entryPrice * 100);
             const shares = parseFloat(trade.entryShares || "0");
             const fees = parseFloat(trade.entryFees || "0");
+            const usdAmount = parseFloat(trade.simulatedUsdAmount || "1");
             const isUp = trade.outcomeLabel === "Up";
             const isClosed = trade.status === "CLOSED";
             const isOpen = trade.status === "OPEN";
@@ -110,10 +108,12 @@ export function TradesTable({
             const hasPnl = isClosed && !!trade.realizedPnl;
             const pnlPositive = realizedPnl >= 0;
 
-            // BTC distance
-            const btcDist = trade.btcDistanceUsd
-              ? parseFloat(trade.btcDistanceUsd)
-              : null;
+            // P&L percentages
+            const realizedPnlPct = usdAmount > 0 ? (realizedPnl / usdAmount) * 100 : 0;
+            const unrealizedPnlPct =
+              unrealizedPnl !== null && usdAmount > 0
+                ? (unrealizedPnl / usdAmount) * 100
+                : null;
 
             // Window label
             const windowInfo = extractTimeWindow(trade);
@@ -196,11 +196,6 @@ export function TradesTable({
                   {shares.toFixed(1)}
                 </td>
 
-                {/* BTC DISTANCE */}
-                <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
-                  {btcDist !== null ? `$${btcDist.toFixed(0)}` : "—"}
-                </td>
-
                 {/* P&L */}
                 <td className="py-3 px-3 text-right">
                   {hasPnl ? (
@@ -210,8 +205,14 @@ export function TradesTable({
                           pnlPositive ? "text-emerald-500" : "text-red-500"
                         }`}
                       >
-                        {pnlPositive ? "+" : ""}$
-                        {Math.abs(realizedPnl).toFixed(2)}
+                        {pnlPositive ? "+" : "-"}${Math.abs(realizedPnl).toFixed(4)}
+                      </span>
+                      <span
+                        className={`text-[10px] tabular-nums ${
+                          pnlPositive ? "text-emerald-500/60" : "text-red-500/60"
+                        }`}
+                      >
+                        {realizedPnlPct >= 0 ? "+" : ""}{realizedPnlPct.toFixed(2)}%
                       </span>
                     </div>
                   ) : unrealizedPnl !== null ? (
@@ -223,9 +224,19 @@ export function TradesTable({
                             : "text-red-400"
                         }`}
                       >
-                        {unrealizedPnl >= 0 ? "+" : ""}$
-                        {Math.abs(unrealizedPnl).toFixed(2)}
+                        {unrealizedPnl >= 0 ? "+" : "-"}${Math.abs(unrealizedPnl).toFixed(4)}
                       </span>
+                      {unrealizedPnlPct !== null && (
+                        <span
+                          className={`text-[10px] tabular-nums ${
+                            unrealizedPnlPct >= 0
+                              ? "text-emerald-400/60"
+                              : "text-red-400/60"
+                          }`}
+                        >
+                          {unrealizedPnlPct >= 0 ? "+" : ""}{unrealizedPnlPct.toFixed(2)}%
+                        </span>
+                      )}
                       <span className="text-[9px] text-muted-foreground/50 font-mono">
                         unrealized
                       </span>

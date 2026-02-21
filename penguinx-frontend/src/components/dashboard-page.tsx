@@ -96,6 +96,25 @@ export function DashboardPage() {
     return map;
   }, [liveMarkets]);
 
+  // Fallback BTC price at window start from the most recent open trade for this market
+  // (used when the BTC watcher hadn't received a price yet when the market was registered)
+  const btcPriceAtWindowStartFallback = useMemo(() => {
+    const marketId = primaryMarket?.marketId;
+    if (!marketId) return null;
+    const trade = trades.find(
+      (t) => t.marketId === marketId && t.status === "OPEN" && !!t.btcPriceAtEntry,
+    );
+    return trade?.btcPriceAtEntry ? parseFloat(trade.btcPriceAtEntry) : null;
+  }, [primaryMarket, trades]);
+
+  // Polymarket slug for the selected trade's market (for deep-linking in modal)
+  const selectedTradeSlug = useMemo(() => {
+    if (!selectedTrade) return null;
+    const liveMatch = liveMarkets.find((m) => m.marketId === selectedTrade.marketId);
+    if (liveMatch?.slug) return liveMatch.slug;
+    return markets.find((m) => m.id === selectedTrade.marketId)?.slug ?? null;
+  }, [selectedTrade, liveMarkets, markets]);
+
   // Determine window label from config
   const windowLabel = stats?.config?.marketWindow
     ? (MARKET_WINDOW_LABELS[stats.config.marketWindow as MarketWindow] ??
@@ -123,6 +142,7 @@ export function DashboardPage() {
           windowLabel={windowLabel}
           mounted={mounted}
           refetchMarkets={refetchMarkets}
+          btcPriceAtWindowStartFallback={btcPriceAtWindowStartFallback}
         />
 
         {/* ── Two-column: Trades + Sidebar ─────────── */}
@@ -274,6 +294,7 @@ export function DashboardPage() {
         trade={selectedTrade}
         open={selectedTrade !== null}
         onClose={() => setSelectedTrade(null)}
+        marketSlug={selectedTradeSlug}
       />
     </div>
   );
@@ -301,6 +322,7 @@ function TopDashboardSection({
   windowLabel,
   mounted,
   refetchMarkets,
+  btcPriceAtWindowStartFallback,
 }: {
   stats: SystemStats | null;
   btcPrice: { price: number; timestamp: number } | null;
@@ -311,6 +333,7 @@ function TopDashboardSection({
   windowLabel: string;
   mounted: boolean;
   refetchMarkets: () => void;
+  btcPriceAtWindowStartFallback: number | null;
 }) {
   const [period, setPeriod] = useState<"1D" | "1W" | "1M" | "ALL">("ALL");
   const {
@@ -370,6 +393,10 @@ function TopDashboardSection({
 
   const windowType = stats?.config?.marketWindow || "15M";
 
+  // Effective BTC price at window start: use captured value or fall back to entry price from trade
+  const effectiveBtcAtStart =
+    primaryMarket?.btcPriceAtWindowStart ?? btcPriceAtWindowStartFallback ?? null;
+
   const marketDetails = useMemo(() => {
     if (!primaryMarket) return null;
     const question = primaryMarket.question;
@@ -381,12 +408,12 @@ function TopDashboardSection({
     );
     const targetPriceStr = absolutePriceMatch
       ? `$${absolutePriceMatch[1]}`
-      : primaryMarket.btcPriceAtWindowStart !== null
-        ? `$${primaryMarket.btcPriceAtWindowStart.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : effectiveBtcAtStart !== null
+        ? `$${effectiveBtcAtStart.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         : null;
     const targetPriceNum = absolutePriceMatch
       ? parseFloat(absolutePriceMatch[1].replace(/,/g, ""))
-      : (primaryMarket.btcPriceAtWindowStart ?? null);
+      : effectiveBtcAtStart;
 
     const end = new Date(primaryMarket.endDate);
     const windowMinMap: Record<string, number> = {
@@ -426,7 +453,7 @@ function TopDashboardSection({
           : `${mins}M window`,
       direction: isAbove ? "above" : isBelow ? "below" : null,
     };
-  }, [primaryMarket, windowType]);
+  }, [primaryMarket, windowType, effectiveBtcAtStart]);
 
   // BTC price distance from target
   const btcDistanceInfo = useMemo(() => {
@@ -513,14 +540,12 @@ function TopDashboardSection({
                 <div className="grid grid-cols-2 divide-x divide-border/30">
                   <div className="p-3">
                     <div className="text-[10px] font-mono text-muted-foreground mb-1 tracking-widest">
-                      {primaryMarket.btcPriceAtWindowStart !== null
-                        ? "BTC AT START"
-                        : "PRICE TO BEAT"}
+                      {effectiveBtcAtStart !== null ? "BTC AT START" : "PRICE TO BEAT"}
                     </div>
                     <div className="text-base font-bold font-mono tabular-nums text-foreground">
                       {marketDetails?.targetPriceStr ?? "—"}
                     </div>
-                    {primaryMarket.btcPriceAtWindowStart !== null && (
+                    {effectiveBtcAtStart !== null && (
                       <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
                         window open price
                       </div>
@@ -560,15 +585,30 @@ function TopDashboardSection({
 
               {/* Timer + odds */}
               <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-1 border border-border/30 rounded-lg p-3 flex flex-col items-center justify-center text-center">
-                  <div className="text-[10px] font-mono text-muted-foreground mb-1 tracking-widest">
-                    {countdown?.expired ? "ENDED" : "CLOSES"}
+                <div className="col-span-1 border border-border/30 rounded-lg p-3 flex flex-col items-center justify-center text-center gap-0.5">
+                  <div className="text-[10px] font-mono text-muted-foreground tracking-widest">
+                    {countdown?.expired ? "ENDED" : "WINDOW"}
                   </div>
                   <div
-                    className={`text-lg font-bold font-mono tabular-nums tracking-tight leading-none ${countdown?.expired ? "text-amber-400" : countdown && countdown.hours === 0 && countdown.minutes < 1 ? "text-red-400 animate-pulse" : "text-foreground"}`}
+                    className={`text-sm font-bold font-mono tabular-nums leading-none ${
+                      countdown?.expired ? "text-amber-400" : "text-foreground"
+                    }`}
                   >
-                    {fmtCountdown()}
+                    {marketDetails?.endTime ?? "—"}
                   </div>
+                  {!countdown?.expired && (
+                    <div
+                      className={`text-[10px] font-mono tabular-nums ${
+                        countdown &&
+                        countdown.hours === 0 &&
+                        countdown.minutes < 1
+                          ? "text-red-400 animate-pulse"
+                          : "text-muted-foreground/50"
+                      }`}
+                    >
+                      {fmtCountdown()}
+                    </div>
+                  )}
                 </div>
                 <div className="border border-emerald-500/20 bg-emerald-500/5 rounded-lg p-3 flex flex-col items-center justify-center text-center">
                   <div className="text-[10px] font-mono text-emerald-500/60 mb-1">

@@ -8,17 +8,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ExternalLink } from "lucide-react";
 
 interface TradeDetailPopupProps {
   trade: SimulatedTrade | null;
   open: boolean;
   onClose: () => void;
+  /** Polymarket event slug for deep-linking (optional) */
+  marketSlug?: string | null;
 }
 
 export function TradeDetailPopup({
   trade,
   open,
   onClose,
+  marketSlug,
 }: TradeDetailPopupProps) {
   if (!trade) return null;
 
@@ -55,15 +59,36 @@ export function TradeDetailPopup({
           <Section title="MARKET">
             <Row label="Window Type" value={windowLabel} />
             <Row
-              label="Token ID"
-              value={trade.tokenId ? trade.tokenId.slice(0, 20) + "…" : "—"}
-            />
-            <Row
               label="Market ID"
-              value={trade.marketId ? trade.marketId.slice(0, 20) + "…" : "—"}
+              value={trade.marketId ? trade.marketId : "—"}
             />
             <Row label="Outcome" value={trade.outcomeLabel || "—"} />
             <Row label="Order Type" value={trade.orderType || "—"} />
+            <Row
+              label="Token ID"
+              value={trade.tokenId ? trade.tokenId.slice(0, 24) + "…" : "—"}
+            />
+            <Row
+              label="Polymarket"
+              value={
+                trade.marketId ? (
+                  <a
+                    href={
+                      marketSlug
+                        ? `https://polymarket.com/event/${marketSlug}`
+                        : `https://polymarket.com/market/${trade.marketId}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                  >
+                    Open on Polymarket <ExternalLink size={10} />
+                  </a>
+                ) : (
+                  "—"
+                )
+              }
+            />
             {trade.experimentId && (
               <Row label="Experiment" value={trade.experimentId} />
             )}
@@ -90,16 +115,20 @@ export function TradeDetailPopup({
           <Section title="BTC CONTEXT">
             <Row
               label="BTC at Entry"
-              value={btcAtEntry ? `$${btcAtEntry.toLocaleString()}` : "—"}
+              value={btcAtEntry ? `$${btcAtEntry.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
             />
-            <Row
-              label="BTC Target"
-              value={btcTarget ? `$${btcTarget.toLocaleString()}` : "—"}
-            />
-            <Row
-              label="Distance"
-              value={btcDist !== null ? `${btcDist.toFixed(3)}%` : "—"}
-            />
+            {btcTarget !== null && btcTarget > 0 && (
+              <Row
+                label="BTC Target"
+                value={`$${btcTarget.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              />
+            )}
+            {btcDist !== null && btcDist > 0 && (
+              <Row
+                label="BTC Distance"
+                value={`$${btcDist.toFixed(2)}`}
+              />
+            )}
           </Section>
 
           {/* Result info */}

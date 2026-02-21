@@ -35,6 +35,7 @@ import type {
   BestBidAskEvent,
   MarketResolvedEvent,
   OrderbookUpdateEvent,
+  BtcPriceData,
 } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
@@ -259,6 +260,20 @@ export class MarketOrchestrator extends EventEmitter {
     this.wsWatcher.on("marketResolved", (ev: MarketResolvedEvent) =>
       this.onMarketResolved(ev),
     );
+
+    // BTC price → lazily fill btcPriceAtWindowStart for any market registered before
+    //              the first BTC price arrived (unavoidable race on cold start).
+    this.btcWatcher.on("btcPriceUpdate", (data: BtcPriceData) => {
+      for (const state of this.activeMarkets.values()) {
+        if (state.btcPriceAtWindowStart === null) {
+          state.btcPriceAtWindowStart = data.price;
+          logger.info(
+            { marketId: state.marketId, btcPrice: data.price },
+            "btcPriceAtWindowStart set lazily after first BTC tick",
+          );
+        }
+      }
+    });
 
     // Strategy → opportunity detected
     this.strategyEngine.on("opportunityDetected", (opp: MarketOpportunity) => {
