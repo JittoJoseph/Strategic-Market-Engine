@@ -29,19 +29,26 @@ interface FillDetail {
 }
 
 /**
- * Simulates a GTC limit BUY order that crosses at the best ask.
+ * Simulates a GTC limit BUY order execution.
  *
- * Models the scenario: user places a limit buy at `limitPrice`, and the order
- * fills immediately against resting asks at or below that price (taker fill).
+ * Models the end-of-window micro-profit strategy:
+ *   1. Both YES and NO tokens have resting limit orders at 0.97 in the last minute.
+ *   2. Only the WINNING token ever reaches 0.97 (the losing token goes to 0).
+ *   3. When triggered, the order fills against resting asks at ≤ limitPrice.
  *
- * Fee formula (from Polymarket docs, for 5M/15M crypto markets):
- *   fee = C × feeRate × (p × (1 - p))^exponent
- *   where C = shares, p = price, feeRate = 0.25, exponent = 2
+ * This is modelled as a TAKER fill (immediately crossing the spread). In the
+ * real trade execution this would be a resting maker limit at 0.97, so actual
+ * fees would be even lower (20% maker rebate), but the difference is negligible
+ * at p≈0.97 where the effective fee rate is ~0.02%.
  *
- * At p=0.97: fee per share = 0.25 × (0.97 × 0.03)^2 = 0.25 × 0.000847 = 0.000212
- * So for 100 shares at 0.97: fee = 0.0212 USDC (~0.02% effective)
+ * Fee formula for 5-min / 15-min crypto markets (Polymarket docs):
+ *   fee = C × 0.25 × (p × (1-p))^2
+ * At p=0.97: fee_per_share ≈ 0.000212 USDC (effective ~0.02%)
  *
- * Fees are rounded to 4 decimal places (smallest fee: 0.0001 USDC).
+ * @param orderbook   Live CLOB orderbook snapshot
+ * @param usdAmount   USDC budget for this order
+ * @param limitPrice  Maximum price we are willing to pay per share
+ * @param feeRateBps  Fee rate in basis points from CLOB API (>0 = fees enabled)
  */
 export function simulateLimitBuy(
   orderbook: Orderbook,
@@ -137,24 +144,42 @@ export function simulateLimitBuy(
 }
 
 /**
- * Calculate fee per share using Polymarket's documented formula.
- * fee_per_share = feeRate × (p × (1-p))^exponent
+ * Calculate fee per share using Polymarket's documented formula for 5-min / 15-min crypto markets.
  *
- * For crypto 5M/15M: feeRate = 0.25, exponent = 2
- * For fee-free markets: returns 0
+ * Formula (from Polymarket docs):
+ *   fee_per_share = feeRate × (p × (1-p))^exponent
+ * Where:
+ *   feeRate  = 0.25   (CRYPTO_FEE.RATE)
+ *   exponent = 2      (CRYPTO_FEE.EXPONENT)
+ *   p        = share price (0–1)
+ *
+ * The fee approaches ZERO at price extremes and peaks at ~1.56% at p=0.50.
+ * At our typical entry price of p≈0.97:
+ *   fee_per_share = 0.25 × (0.97 × 0.03)^2 = 0.25 × 0.000847 ≈ 0.000212 USDC/share
+ *   (~0.02% effective rate — nearly free)
+ *
+ * Note: `feeRateBps` is the value embedded in real CLOB orders (used by the
+ * smart contract for signature verification). It is used here solely as a
+ * "fees-enabled?" gate — feeRateBps > 0 means this is a fee-enabled market
+ * (5M/15M crypto). The actual per-share fee is always computed from the
+ * Polymarket formula above, NOT from feeRateBps directly.
+ *
+ * Maker rebate: in real limit orders the maker receives 20% of the fee back.
+ * This simulation conservatively models taker fees (no rebate), which slightly
+ * overstates costs at our near-extreme entry prices.
+ *
+ * Fees are rounded to 4 decimal places (smallest fee unit: 0.0001 USDC).
  */
 function calculateFeePerShare(price: number, feeRateBps: number): number {
+  // Gate: if feeRateBps is 0 this is a fee-free market
   if (feeRateBps <= 0) return 0;
 
-  // Use the canonical formula from docs:
-  // fee = C × feeRate × (p × (1-p))^exponent
-  // Per share (C=1): fee = feeRate × (p × (1-p))^exponent
-  const feeRate = CRYPTO_FEE.RATE;
-  const exponent = CRYPTO_FEE.EXPONENT;
-  const pq = price * (1 - price); // p × (1-p)
+  const feeRate = CRYPTO_FEE.RATE;     // 0.25 for 5M/15M crypto
+  const exponent = CRYPTO_FEE.EXPONENT; // 2 for 5M/15M crypto
+  const pq = price * (1 - price);       // p × (1-p), maximised at p=0.5
   const fee = feeRate * Math.pow(pq, exponent);
 
-  // Round to 4 decimal places (smallest fee: 0.0001)
+  // Round to 4 decimal places (Polymarket precision; sub-0.0001 rounds to 0)
   return Math.round(fee * 10000) / 10000;
 }
 

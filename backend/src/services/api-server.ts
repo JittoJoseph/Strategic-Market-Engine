@@ -126,7 +126,7 @@ export class ApiServer {
     });
 
     // System stats
-    this.app.get("/api/system/stats", async (_req, res) => {
+    this.app.get(["/api/system/stats", "/api/stats"], async (_req, res) => {
       try {
         const orchestrator = getMarketOrchestrator();
         const btcWatcher = getBtcPriceWatcher();

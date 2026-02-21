@@ -308,8 +308,18 @@ export class MarketOrchestrator extends EventEmitter {
     }
 
     // Capture current BTC price as the "price to beat" for relative Up/Down markets.
-    // For absolute price markets, targetPrice takes precedence.
-    const btcPriceAtWindowStart = this.btcWatcher.getCurrentPrice()?.price ?? null;
+    // For absolute price markets (above/below $X), targetPrice takes precedence.
+    // If the RTDS hasn't received a price yet, fall back to Binance REST immediately.
+    let btcPriceAtWindowStart = this.btcWatcher.getCurrentPrice()?.price ?? null;
+    if (btcPriceAtWindowStart === null) {
+      btcPriceAtWindowStart = await this.btcWatcher.fetchCurrentPriceRest();
+      if (btcPriceAtWindowStart !== null) {
+        logger.info(
+          { btcPriceAtWindowStart, marketId: market.id },
+          "btcPriceAtWindowStart sourced via Binance REST (RTDS not ready yet)",
+        );
+      }
+    }
 
     const state: ActiveMarketState = {
       marketId: market.id,
@@ -328,14 +338,17 @@ export class MarketOrchestrator extends EventEmitter {
 
     this.activeMarkets.set(market.id, state);
 
-    // Register both outcome tokens with the strategy engine
+    // Register both outcome tokens with the strategy engine.
+    // For relative Up/Down markets (targetPrice=null), use btcPriceAtWindowStart
+    // as the effective target so that MIN_BTC_DISTANCE_USD can be applied correctly.
+    const effectiveTargetPrice = targetPrice ?? btcPriceAtWindowStart;
     for (let i = 0; i < tokenIds.length; i++) {
       this.strategyEngine.registerMarket(
         market.id,
         tokenIds[i]!,
         outcomes[i] ?? `Outcome${i}`,
         endDate,
-        targetPrice,
+        effectiveTargetPrice,
       );
     }
 
