@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 
 interface TradeDetailPopupProps {
   trade: SimulatedTrade | null;
@@ -16,6 +16,8 @@ interface TradeDetailPopupProps {
   onClose: () => void;
   /** Polymarket event slug for deep-linking (optional) */
   marketSlug?: string | null;
+  /** Full market question shown in modal header */
+  marketQuestion?: string | null;
 }
 
 export function TradeDetailPopup({
@@ -23,6 +25,7 @@ export function TradeDetailPopup({
   open,
   onClose,
   marketSlug,
+  marketQuestion,
 }: TradeDetailPopupProps) {
   if (!trade) return null;
 
@@ -47,192 +50,212 @@ export function TradeDetailPopup({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg font-mono bg-background border-border">
-        <DialogHeader>
-          <DialogTitle className="text-sm font-bold tracking-wider">
-            TRADE DETAIL
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4 text-xs">
-          {/* Market info */}
-          <Section title="MARKET">
-            <Row label="Window Type" value={windowLabel} />
-            <Row
-              label="Market ID"
-              value={trade.marketId ? trade.marketId : "—"}
-            />
-            <Row label="Outcome" value={trade.outcomeLabel || "—"} />
-            <Row label="Order Type" value={trade.orderType || "—"} />
-            <Row
-              label="Token ID"
-              value={trade.tokenId ? trade.tokenId.slice(0, 24) + "…" : "—"}
-            />
-            <Row
-              label="Polymarket"
-              value={
-                trade.marketId ? (
-                  <a
-                    href={
-                      marketSlug
-                        ? `https://polymarket.com/event/${marketSlug}`
-                        : `https://polymarket.com/market/${trade.marketId}`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
-                  >
-                    Open on Polymarket <ExternalLink size={10} />
-                  </a>
-                ) : (
-                  "—"
-                )
-              }
-            />
-            {trade.experimentId && (
-              <Row label="Experiment" value={trade.experimentId} />
+      <DialogContent className="max-w-lg font-mono bg-background border-border flex flex-col max-h-[90vh] gap-0 p-0">
+        {/* Sticky header with title, market question, and close button */}
+        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-border/30 shrink-0">
+          <div className="flex flex-col gap-1 min-w-0">
+            <DialogHeader>
+              <DialogTitle className="text-sm font-bold tracking-wider">
+                TRADE DETAIL
+              </DialogTitle>
+            </DialogHeader>
+            {marketQuestion && (
+              <p className="text-[11px] font-mono text-muted-foreground/80 leading-snug">
+                {marketQuestion}
+              </p>
             )}
-          </Section>
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 mt-0.5 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            aria-label="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
 
-          {/* Pricing */}
-          <Section title="PRICING">
-            <Row label="Entry Price" value={`$${entryPrice.toFixed(6)}`} />
-            <Row
-              label="Shares"
-              value={parseFloat(trade.entryShares).toFixed(4)}
-            />
-            <Row
-              label="USD Amount"
-              value={`$${parseFloat(trade.simulatedUsdAmount).toFixed(4)}`}
-            />
-            <Row label="Entry Fees" value={`$${entryFees.toFixed(6)}`} />
-            {trade.feeRateBps != null && (
-              <Row label="Fee Rate" value={`${trade.feeRateBps} bps`} />
-            )}
-          </Section>
-
-          {/* BTC Context */}
-          <Section title="BTC CONTEXT">
-            <Row
-              label="BTC at Entry"
-              value={
-                btcAtEntry
-                  ? `$${btcAtEntry.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                  : "—"
-              }
-            />
-            {btcTarget !== null && btcTarget > 0 && (
+        {/* Scrollable body */}
+        <div className="overflow-y-auto flex-1 px-5 py-4">
+          <div className="space-y-4 text-xs">
+            {/* Market info */}
+            <Section title="MARKET">
+              <Row label="Window Type" value={windowLabel} />
               <Row
-                label="BTC Target"
-                value={`$${btcTarget.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                label="Market ID"
+                value={trade.marketId ? trade.marketId : "—"}
               />
-            )}
-            {btcDist !== null && btcDist > 0 && (
-              <Row label="BTC Distance" value={`$${btcDist.toFixed(2)}`} />
-            )}
-          </Section>
-
-          {/* Result info */}
-          <Section title="RESULT">
-            <Row
-              label="Status"
-              value={
-                <span
-                  className={
-                    isClosed
-                      ? pnl >= 0
-                        ? "text-emerald-500"
-                        : "text-red-500"
-                      : "text-blue-500"
-                  }
-                >
-                  {isClosed ? "CLOSED" : "OPEN"}
-                </span>
-              }
-            />
-            {trade.exitOutcome && (
+              <Row label="Outcome" value={trade.outcomeLabel || "—"} />
+              <Row label="Order Type" value={trade.orderType || "—"} />
               <Row
-                label="Outcome"
+                label="Token ID"
+                value={trade.tokenId ? trade.tokenId.slice(0, 24) + "…" : "—"}
+              />
+              <Row
+                label="Polymarket"
+                value={
+                  trade.marketId ? (
+                    <a
+                      href={
+                        marketSlug
+                          ? `https://polymarket.com/event/${marketSlug}`
+                          : `https://polymarket.com/market/${trade.marketId}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                    >
+                      Open on Polymarket <ExternalLink size={10} />
+                    </a>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              {trade.experimentId && (
+                <Row label="Experiment" value={trade.experimentId} />
+              )}
+            </Section>
+
+            {/* Pricing */}
+            <Section title="PRICING">
+              <Row label="Entry Price" value={`$${entryPrice.toFixed(6)}`} />
+              <Row
+                label="Shares"
+                value={parseFloat(trade.entryShares).toFixed(4)}
+              />
+              <Row
+                label="USD Amount"
+                value={`$${parseFloat(trade.simulatedUsdAmount).toFixed(4)}`}
+              />
+              <Row label="Entry Fees" value={`$${entryFees.toFixed(6)}`} />
+              {trade.feeRateBps != null && (
+                <Row label="Fee Rate" value={`${trade.feeRateBps} bps`} />
+              )}
+            </Section>
+
+            {/* BTC Context */}
+            <Section title="BTC CONTEXT">
+              <Row
+                label="BTC at Entry"
+                value={
+                  btcAtEntry
+                    ? `$${btcAtEntry.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : "—"
+                }
+              />
+              {btcTarget !== null && btcTarget > 0 && (
+                <Row
+                  label="BTC Target"
+                  value={`$${btcTarget.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                />
+              )}
+              {btcDist !== null && btcDist > 0 && (
+                <Row label="BTC Distance" value={`$${btcDist.toFixed(2)}`} />
+              )}
+            </Section>
+
+            {/* Result info */}
+            <Section title="RESULT">
+              <Row
+                label="Status"
                 value={
                   <span
                     className={
-                      trade.exitOutcome === "WIN"
+                      isClosed
+                        ? pnl >= 0
+                          ? "text-emerald-500"
+                          : "text-red-500"
+                        : "text-blue-500"
+                    }
+                  >
+                    {isClosed ? "CLOSED" : "OPEN"}
+                  </span>
+                }
+              />
+              {trade.exitOutcome && (
+                <Row
+                  label="Outcome"
+                  value={
+                    <span
+                      className={
+                        trade.exitOutcome === "WIN"
+                          ? "text-emerald-500"
+                          : trade.exitOutcome === "STOP_LOSS"
+                            ? "text-amber-500"
+                            : "text-red-500"
+                      }
+                    >
+                      {trade.exitOutcome}
+                    </span>
+                  }
+                />
+              )}
+              {exitPrice !== null && (
+                <Row label="Exit Price" value={`$${exitPrice.toFixed(6)}`} />
+              )}
+              {isClosed && (
+                <Row
+                  label="Realized PnL"
+                  value={
+                    <span
+                      className={
+                        pnl > 0
+                          ? "text-emerald-500"
+                          : pnl < 0
+                            ? "text-red-500"
+                            : "text-muted-foreground"
+                      }
+                    >
+                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(4)}
+                    </span>
+                  }
+                />
+              )}
+            </Section>
+
+            {/* Execution */}
+            <Section title="EXECUTION">
+              <Row
+                label="Fill Status"
+                value={
+                  <span
+                    className={
+                      trade.fillStatus === "FULL"
                         ? "text-emerald-500"
-                        : trade.exitOutcome === "STOP_LOSS"
+                        : trade.fillStatus === "PARTIAL"
                           ? "text-amber-500"
                           : "text-red-500"
                     }
                   >
-                    {trade.exitOutcome}
+                    {trade.fillStatus || "—"}
                   </span>
                 }
               />
-            )}
-            {exitPrice !== null && (
-              <Row label="Exit Price" value={`$${exitPrice.toFixed(6)}`} />
-            )}
-            {isClosed && (
-              <Row
-                label="Realized PnL"
-                value={
-                  <span
-                    className={
-                      pnl > 0
-                        ? "text-emerald-500"
-                        : pnl < 0
-                          ? "text-red-500"
-                          : "text-muted-foreground"
-                    }
-                  >
-                    {pnl >= 0 ? "+" : ""}${pnl.toFixed(4)}
-                  </span>
-                }
-              />
-            )}
-          </Section>
+              {trade.strategyTrigger && (
+                <Row label="Strategy Trigger" value={trade.strategyTrigger} />
+              )}
+            </Section>
 
-          {/* Execution */}
-          <Section title="EXECUTION">
-            <Row
-              label="Fill Status"
-              value={
-                <span
-                  className={
-                    trade.fillStatus === "FULL"
-                      ? "text-emerald-500"
-                      : trade.fillStatus === "PARTIAL"
-                        ? "text-amber-500"
-                        : "text-red-500"
-                  }
-                >
-                  {trade.fillStatus || "—"}
-                </span>
-              }
-            />
-            {trade.strategyTrigger && (
-              <Row label="Strategy Trigger" value={trade.strategyTrigger} />
-            )}
-          </Section>
-
-          {/* Timestamps */}
-          <Section title="TIMESTAMPS">
-            <Row
-              label="Opened"
-              value={new Date(trade.entryTs).toLocaleString()}
-            />
-            {trade.exitTs && (
+            {/* Timestamps */}
+            <Section title="TIMESTAMPS">
               <Row
-                label="Closed"
-                value={new Date(trade.exitTs).toLocaleString()}
+                label="Opened"
+                value={new Date(trade.entryTs).toLocaleString()}
               />
-            )}
-            {trade.exitTs && (
-              <Row
-                label="Duration"
-                value={formatDuration(trade.entryTs, trade.exitTs)}
-              />
-            )}
-          </Section>
+              {trade.exitTs && (
+                <Row
+                  label="Closed"
+                  value={new Date(trade.exitTs).toLocaleString()}
+                />
+              )}
+              {trade.exitTs && (
+                <Row
+                  label="Duration"
+                  value={formatDuration(trade.entryTs, trade.exitTs)}
+                />
+              )}
+            </Section>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

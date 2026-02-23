@@ -96,10 +96,13 @@ export interface SystemStats {
   config: {
     marketWindow: string;
     entryPriceThreshold: number;
+    maxEntryPrice: number;
     tradeFromWindowSeconds: number;
     simulationAmountUsd: number;
     maxSimultaneousPositions: number;
     minBtcDistanceUsd: number;
+    stopLossEnabled: boolean;
+    stopLossThreshold: number;
   };
 }
 

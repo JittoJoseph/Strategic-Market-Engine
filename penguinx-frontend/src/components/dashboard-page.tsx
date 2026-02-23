@@ -108,12 +108,22 @@ export function DashboardPage() {
     return map;
   }, [liveMarkets, markets]);
 
-  // Polymarket slug for the selected trade (for deep-link in modal)
+  // Polymarket slug + question for the selected trade (for deep-link and modal header)
   const selectedTradeSlug = useMemo(() => {
     if (!selectedTrade) return null;
     return (
       liveMarkets.find((m) => m.marketId === selectedTrade.marketId)?.slug ??
       markets.find((m) => m.id === selectedTrade.marketId)?.slug ??
+      null
+    );
+  }, [selectedTrade, liveMarkets, markets]);
+
+  const selectedTradeQuestion = useMemo(() => {
+    if (!selectedTrade) return null;
+    return (
+      liveMarkets.find((m) => m.marketId === selectedTrade.marketId)
+        ?.question ??
+      markets.find((m) => m.id === selectedTrade.marketId)?.question ??
       null
     );
   }, [selectedTrade, liveMarkets, markets]);
@@ -258,8 +268,8 @@ export function DashboardPage() {
               {stats?.config ? (
                 <div className="space-y-2 text-xs font-mono">
                   <StatRow
-                    label="Entry Threshold"
-                    value={`${(stats.config.entryPriceThreshold * 100).toFixed(0)}¢`}
+                    label="Entry Range"
+                    value={`${(stats.config.entryPriceThreshold * 100).toFixed(0)}–${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
                   />
                   <StatRow
                     label="Trade Window"
@@ -276,6 +286,16 @@ export function DashboardPage() {
                   <StatRow
                     label="BTC Min Dist"
                     value={`$${stats.config.minBtcDistanceUsd}`}
+                  />
+                  <StatRow
+                    label="Stop Loss"
+                    value={
+                      stats.config.stopLossEnabled
+                        ? `${(stats.config.stopLossThreshold * 100).toFixed(0)}¢ trigger`
+                        : "DISABLED"
+                    }
+                    accent={stats.config.stopLossEnabled}
+                    warn={!stats.config.stopLossEnabled}
                   />
                 </div>
               ) : (
@@ -295,6 +315,7 @@ export function DashboardPage() {
         open={selectedTrade !== null}
         onClose={() => setSelectedTrade(null)}
         marketSlug={selectedTradeSlug}
+        marketQuestion={selectedTradeQuestion}
       />
     </div>
   );
@@ -866,21 +887,50 @@ function TopDashboardSection({
         </div>
       </div>
 
-      {/* Pending resolution strip */}
+      {/* Awaiting resolution — compact card-style design */}
       {positionMarkets.length > 0 && (
-        <div className="border-t border-border/20 px-5 py-2 flex items-center gap-3">
-          <span className="text-[10px] font-mono text-amber-400 tracking-wider whitespace-nowrap">
-            AWAITING RESOLUTION
-          </span>
-          <div className="flex flex-wrap gap-1.5">
-            {positionMarkets.map((m) => (
-              <span
-                key={m.marketId}
-                className="text-[10px] font-mono text-muted-foreground border border-amber-500/20 rounded px-2 py-0.5"
-              >
-                {m.question?.slice(0, 36) ?? m.marketId.slice(0, 12)}…
-              </span>
-            ))}
+        <div className="border-t border-border/20 bg-card/20">
+          <div className="px-5 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-blue-500/60 animate-pulse" />
+                <span className="text-[10px] font-mono text-muted-foreground tracking-[0.15em]">
+                  AWAITING RESOLUTION
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground/60">
+                  ({positionMarkets.length})
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 justify-end">
+                {positionMarkets.map((m) => {
+                  // Compact label: "Feb 23 · 3:30–3:35 AM"
+                  const end = new Date(m.endDate);
+                  const start = m.windowStart ? new Date(m.windowStart) : null;
+                  const datePart = end.toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  });
+                  const timeFmt = (d: Date) =>
+                    d.toLocaleTimeString("en-US", {
+                      hour: "numeric",
+                      minute: "2-digit",
+                      hour12: true,
+                    });
+                  const label = start
+                    ? `${datePart} · ${timeFmt(start).replace(/ AM| PM/, "")}–${timeFmt(end)}`
+                    : `${datePart} · ${timeFmt(end)}`;
+                  return (
+                    <span
+                      key={m.marketId}
+                      title={m.question ?? undefined}
+                      className="text-[10px] font-mono text-muted-foreground bg-muted/30 border border-border/40 rounded-md px-2.5 py-1 whitespace-nowrap hover:bg-muted/50 transition-colors cursor-help"
+                    >
+                      {label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}
