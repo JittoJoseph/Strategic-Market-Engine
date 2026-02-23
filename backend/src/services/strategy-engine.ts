@@ -20,7 +20,6 @@ export interface MarketOpportunity {
   trigger: string;
 }
 
-/** Per-token price state tracked by the engine */
 interface TokenPriceState {
   bestBid: number;
   bestAsk: number;
@@ -28,30 +27,13 @@ interface TokenPriceState {
   lastUpdate: number;
 }
 
-/** Market info registered with the engine */
 interface WatchedMarket {
   marketId: string;
   tokenId: string;
   outcomeLabel: string;
   endDate: Date;
-  targetPrice: number | null; // BTC target price from market question
+  targetPrice: number | null;
 }
-
-/**
- * Strategy: End-of-Window Micro-Profit
- *
- * Detects opportunities in the final seconds of a BTC market window
- * where one outcome is nearly certain (price ≥ threshold like 97¢).
- *
- * Entry conditions (ALL must be true):
- *   1. Within last TRADE_FROM_WINDOW_SECONDS of market end
- *   2. Token midpoint ≥ ENTRY_PRICE_THRESHOLD (e.g., 0.97)
- *   3. BTC price distance from target ≥ MIN_BTC_DISTANCE_USD
- *   4. Position limit not reached
- *   5. Not already holding this market/token
- *
- * Emits: "opportunityDetected" with MarketOpportunity
- */
 export class StrategyEngine extends EventEmitter {
   private priceStates: Map<string, TokenPriceState> = new Map();
   private watchedMarkets: Map<string, WatchedMarket> = new Map(); // tokenId → market info
@@ -78,14 +60,9 @@ export class StrategyEngine extends EventEmitter {
   unregisterMarket(tokenId: string): void {
     this.watchedMarkets.delete(tokenId);
     this.priceStates.delete(tokenId);
-    // Clear evaluated flag so future markets with this token can be re-evaluated
     this.evaluatedTokens.delete(tokenId);
   }
 
-  /**
-   * Update the target price for a token's market (used when btcPriceAtWindowStart
-   * is set lazily after the window opens for relative Up/Down markets).
-   */
   updateTargetPrice(tokenId: string, targetPrice: number): void {
     const market = this.watchedMarkets.get(tokenId);
     if (market) {
@@ -97,8 +74,9 @@ export class StrategyEngine extends EventEmitter {
     this.openPositionCount = count;
   }
 
-  markTokenEvaluated(tokenId: string): void {
-    this.evaluatedTokens.add(tokenId);
+  /** Allow the orchestrator to retry a token that failed to fill. */
+  clearEvaluated(tokenId: string): void {
+    this.evaluatedTokens.delete(tokenId);
   }
 
   resetForNewWindow(): void {
@@ -113,17 +91,12 @@ export class StrategyEngine extends EventEmitter {
     };
   }
 
-  /**
-   * Called on every price update from the WebSocket.
-   * Evaluates if a trade opportunity exists.
-   */
   evaluatePrice(
     tokenId: string,
     bestBid: number,
     bestAsk: number,
     btcPriceData: BtcPriceData | null,
   ): void {
-    // Update price state
     const midpoint = (bestBid + bestAsk) / 2;
     this.priceStates.set(tokenId, {
       bestBid,
@@ -132,69 +105,44 @@ export class StrategyEngine extends EventEmitter {
       lastUpdate: Date.now(),
     });
 
-    // Get market info for this token
     const market = this.watchedMarkets.get(tokenId);
     if (!market) return;
-
-    // Skip if already evaluated/triggered
     if (this.evaluatedTokens.has(tokenId)) return;
 
     const config = getConfig();
-    const now = Date.now();
-    const endTime = market.endDate.getTime();
-    const secondsToEnd = (endTime - now) / 1000;
+    const secondsToEnd = (market.endDate.getTime() - Date.now()) / 1000;
 
-    // Condition 1: Must be in the trade window (last N seconds before market end)
     if (
       secondsToEnd < 0 ||
       secondsToEnd > config.strategy.tradeFromWindowSeconds
-    ) {
+    )
       return;
-    }
+    if (midpoint < config.strategy.entryPriceThreshold) return;
 
-    // Condition 2: Midpoint must be at or above the entry threshold
-    if (midpoint < config.strategy.entryPriceThreshold) {
-      return;
-    }
-
-    // Condition 3: BTC price distance check
     if (!btcPriceData || btcPriceData.price <= 0) {
-      logger.debug({ tokenId }, "No BTC price data available, skipping");
+      logger.debug({ tokenId }, "Skipping: no BTC price");
       return;
     }
 
-    if (market.targetPrice === null) {
-      // For relative Up/Down markets, targetPrice will be set lazily when the
-      // window opens (btcPriceAtWindowStart). If it's still null, we don't have
-      // the window start price yet — skip this evaluation entirely.
-      return;
-    } else {
-      const btcDistanceUsd = this.calculateBtcDistanceUsd(
-        btcPriceData.price,
-        market.targetPrice,
+    // targetPrice is the BTC price at window open. It remains null until
+    // tryFillBtcWindowStart() sets it; skip until then.
+    if (market.targetPrice === null) return;
+
+    const btcDistanceUsd = this.calculateBtcDistanceUsd(
+      btcPriceData.price,
+      market.targetPrice,
+    );
+
+    if (btcDistanceUsd < config.strategy.minBtcDistanceUsd) {
+      logger.debug(
+        { tokenId, btcDistanceUsd, min: config.strategy.minBtcDistanceUsd },
+        "Skipping: BTC too close to target",
       );
-
-      if (btcDistanceUsd < config.strategy.minBtcDistanceUsd) {
-        logger.debug(
-          {
-            tokenId,
-            btcDistanceUsd,
-            minRequired: config.strategy.minBtcDistanceUsd,
-          },
-          "BTC distance too small, skipping (too volatile)",
-        );
-        return;
-      }
-    }
-
-    // Condition 4: Position limit
-    if (this.openPositionCount >= config.strategy.maxSimultaneousPositions) {
       return;
     }
 
-    const btcDistanceUsd = market.targetPrice
-      ? this.calculateBtcDistanceUsd(btcPriceData.price, market.targetPrice)
-      : 0;
+    if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
+      return;
 
     const opportunity: MarketOpportunity = {
       marketId: market.marketId,
@@ -210,7 +158,6 @@ export class StrategyEngine extends EventEmitter {
       trigger: "end_of_window_micro_profit",
     };
 
-    // Mark as evaluated to prevent re-triggering
     this.evaluatedTokens.add(tokenId);
     this.triggersCount++;
 
@@ -224,22 +171,16 @@ export class StrategyEngine extends EventEmitter {
         btcDistance: btcDistanceUsd.toFixed(2),
         secondsToEnd: secondsToEnd.toFixed(1),
       },
-      "🎯 Opportunity detected: end-of-window micro-profit",
+      "Opportunity detected",
     );
 
     this.emit("opportunityDetected", opportunity);
   }
 
-  /**
-   * Calculate the percentage distance of current BTC price from the target.
-   * For "Up" outcomes: positive distance means BTC is above target (good for Up buyers)
-   * For "Down" outcomes: positive distance means BTC is below target (good for Down buyers)
-   */
   private calculateBtcDistanceUsd(
     currentBtcPrice: number,
     targetPrice: number,
   ): number {
-    // Absolute dollar distance between current BTC price and market target price
     return Math.abs(currentBtcPrice - targetPrice);
   }
 

@@ -7,15 +7,17 @@ import type { BtcPriceData } from "../interfaces/websocket-types.js";
 const logger = createModuleLogger("btc-price-watcher");
 
 /**
- * Real-time BTC price watcher via Polymarket RTDS WebSocket.
- * Endpoint: wss://ws-live-data.polymarket.com
+ * BTC price watcher via Polymarket RTDS WebSocket (wss://ws-live-data.polymarket.com).
  *
- * Subscribes to: topic="crypto_prices_chainlink" (Chainlink btc/usd)
+ * Subscribes to both Binance (crypto_prices/btcusdt) and Chainlink
+ * (crypto_prices_chainlink/btc/usd) topics — whichever fires first sets the price.
+ * Binance fires on every tick; Chainlink fires on deviation. Together they give
+ * reliable, high-frequency coverage.
  *
- * Keepalive: sends TEXT "PING" every 5 s per Polymarket RTDS docs.
- * Reconnects with exponential back-off on any disconnect/error.
+ * All timestamps stored as wall-clock Date.now() so getPriceAt() comparisons
+ * against Date.now() are consistent.
  *
- * Emits: "btcPriceUpdate" { price: number, timestamp: number }
+ * Emits: "btcPriceUpdate" { price, timestamp }
  */
 export class BtcPriceWatcher extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -26,19 +28,12 @@ export class BtcPriceWatcher extends EventEmitter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
-  /**
-   * Rolling buffer of recent Chainlink BTC/USD ticks keyed by Unix-ms timestamp.
-   * Retained for HISTORY_TTL_MS so we can look up the exact Chainlink price at
-   * the moment a window opened (endDate - windowDuration), matching what
-   * Polymarket's oracle snapshots.
-   */
+  /** Rolling 20-min buffer of BTC ticks. Timestamps are wall-clock ms (Date.now()). */
   private priceHistory: Array<{ price: number; timestamp: number }> = [];
 
-  /** Send TEXT "PING" every 5 s to keep RTDS connection alive (per docs). */
   private static readonly PING_INTERVAL = 5_000;
   private static readonly MAX_RECONNECT_DELAY = 30_000;
   private static readonly BASE_RECONNECT_DELAY = 1_000;
-  /** Keep 20 minutes of price history — covers up to the 15M window + scanner lag. */
   private static readonly HISTORY_TTL_MS = 20 * 60 * 1_000;
 
   start(): void {
@@ -73,13 +68,7 @@ export class BtcPriceWatcher extends EventEmitter {
     return { price: this.currentPrice, timestamp: this.lastTimestamp };
   }
 
-  /**
-   * Return the last known BTC/USD Chainlink price at or before `targetMs`
-   * (Unix milliseconds).  This gives the value that Polymarket's oracle would
-   * have snapshotted for a window that opened at that instant.
-   *
-   * Returns null if the history buffer does not reach back that far.
-   */
+  /** Last known BTC/USD price at or before `targetMs` (wall-clock ms). */
   getPriceAt(targetMs: number): number | null {
     let best: { price: number; timestamp: number } | null = null;
     for (const entry of this.priceHistory) {
@@ -96,14 +85,13 @@ export class BtcPriceWatcher extends EventEmitter {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  private setPrice(price: number, timestamp: number): void {
+  private setPrice(price: number, _rtdsTimestamp: number): void {
+    // Store wall-clock time — RTDS source timestamps can lag real time significantly.
+    const timestamp = Date.now();
     this.currentPrice = price;
     this.lastTimestamp = timestamp;
-
-    // Append to rolling history buffer and prune stale entries.
     this.priceHistory.push({ price, timestamp });
     const cutoff = Date.now() - BtcPriceWatcher.HISTORY_TTL_MS;
-    // Remove entries older than the TTL window (they accumulate at the front).
     let pruneIdx = 0;
     while (
       pruneIdx < this.priceHistory.length &&
@@ -112,11 +100,7 @@ export class BtcPriceWatcher extends EventEmitter {
       pruneIdx++;
     }
     if (pruneIdx > 0) this.priceHistory = this.priceHistory.slice(pruneIdx);
-
-    this.emit("btcPriceUpdate", {
-      price,
-      timestamp,
-    } satisfies BtcPriceData);
+    this.emit("btcPriceUpdate", { price, timestamp } satisfies BtcPriceData);
   }
 
   private connect(): void {
@@ -129,18 +113,23 @@ export class BtcPriceWatcher extends EventEmitter {
         logger.info("RTDS WebSocket connected");
         this.reconnectAttempt = 0;
 
-        // Subscribe to Chainlink topic for BTC/USD price.
+        // Subscribe to Binance + Chainlink BTC price topics simultaneously.
+        // Either firing updates our price.
         const subscribeMsg = JSON.stringify({
           action: "subscribe",
           subscriptions: [
+            { topic: "crypto_prices", type: "update", filters: "btcusdt" },
             {
               topic: "crypto_prices_chainlink",
               type: "*",
+              filters: JSON.stringify({ symbol: "btc/usd" }),
             },
           ],
         });
         this.ws!.send(subscribeMsg);
-        logger.debug("RTDS subscribed: crypto_prices_chainlink (Chainlink)");
+        logger.debug(
+          "RTDS subscribed: crypto_prices + crypto_prices_chainlink",
+        );
 
         // Keepalive: send TEXT "PING" every 5 s per Polymarket RTDS docs
         this.pingTimer = setInterval(() => {
@@ -159,19 +148,32 @@ export class BtcPriceWatcher extends EventEmitter {
           const topic = msg["topic"] as string | undefined;
           const payload = msg["payload"] as Record<string, unknown> | undefined;
 
-          // ── Chainlink source ────────────────────────────────────────────
-          // topic = "crypto_prices_chainlink"
-          // payload.symbol = "btc/usd", payload.value = 95123.45
+          // Binance: topic="crypto_prices", payload.symbol="btcusdt"
+          if (topic === "crypto_prices") {
+            if (
+              payload?.["symbol"] === "btcusdt" &&
+              typeof payload["value"] === "number"
+            ) {
+              const rawTs =
+                typeof payload["timestamp"] === "number"
+                  ? (payload["timestamp"] as number)
+                  : ((msg["timestamp"] as number) ?? 0);
+              this.setPrice(payload["value"] as number, rawTs);
+              return;
+            }
+          }
+
+          // Chainlink: topic="crypto_prices_chainlink", payload.symbol="btc/usd"
           if (topic === "crypto_prices_chainlink") {
             if (
               payload?.["symbol"] === "btc/usd" &&
               typeof payload["value"] === "number"
             ) {
-              const ts =
+              const rawTs =
                 typeof payload["timestamp"] === "number"
                   ? (payload["timestamp"] as number)
-                  : ((msg["timestamp"] as number) ?? Date.now());
-              this.setPrice(payload["value"] as number, ts);
+                  : ((msg["timestamp"] as number) ?? 0);
+              this.setPrice(payload["value"] as number, rawTs);
               return;
             }
           }

@@ -37,7 +37,6 @@ import type {
   BestBidAskEvent,
   MarketResolvedEvent,
   OrderbookUpdateEvent,
-  BtcPriceData,
 } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
@@ -271,49 +270,8 @@ export class MarketOrchestrator extends EventEmitter {
       this.onMarketResolved(ev),
     );
 
-    // BTC price → lazily fill btcPriceAtWindowStart for markets whose window had
-    //              not yet opened when they were first discovered, and for any
-    //              cold-start race. Only fire once the BTC tick timestamp is at or
-    //              after the window-open second so we match Polymarket's oracle.
-    //              Also update the strategy engine's target price so distance
-    //              checks work correctly for relative Up/Down markets.
-    this.btcWatcher.on("btcPriceUpdate", (data: BtcPriceData) => {
-      const windowDurationMs =
-        WINDOW_CONFIGS[getConfig().strategy.marketWindow]?.durationMs ??
-        5 * 60_000;
-      for (const state of this.activeMarkets.values()) {
-        if (state.btcPriceAtWindowStart !== null) continue;
-        const windowStartMs = state.endDate.getTime() - windowDurationMs;
-        // Don't fill until the window has actually opened.
-        if (data.timestamp < windowStartMs) continue;
-        const buffered = this.btcWatcher.getPriceAt(windowStartMs);
-        state.btcPriceAtWindowStart = buffered ?? data.price;
-        logger.info(
-          {
-            marketId: state.marketId,
-            btcPrice: state.btcPriceAtWindowStart,
-            source: buffered !== null ? "buffer" : "current-tick",
-          },
-          "btcPriceAtWindowStart set lazily",
-        );
-
-        // For relative Up/Down markets (no absolute target price), update the
-        // strategy engine so the BTC distance check uses the correct target.
-        if (
-          state.targetPrice === null &&
-          state.btcPriceAtWindowStart !== null
-        ) {
-          this.strategyEngine.updateTargetPrice(
-            state.yesTokenId,
-            state.btcPriceAtWindowStart,
-          );
-          this.strategyEngine.updateTargetPrice(
-            state.noTokenId,
-            state.btcPriceAtWindowStart,
-          );
-        }
-      }
-    });
+    // BTC price tick → try to fill window-start price for open markets.
+    this.btcWatcher.on("btcPriceUpdate", () => this.tryFillBtcWindowStart());
 
     // Strategy → opportunity detected
     this.strategyEngine.on("opportunityDetected", (opp: MarketOpportunity) => {
@@ -324,6 +282,45 @@ export class MarketOrchestrator extends EventEmitter {
         );
       });
     });
+  }
+
+  /**
+   * Fill btcPriceAtWindowStart for any market whose window is now open.
+   * Uses the price history buffer first (best accuracy), then the current
+   * live price as fallback. Called on BTC ticks AND CLOB price updates
+   * so the fill happens within seconds of the window opening.
+   */
+  private tryFillBtcWindowStart(): void {
+    const nowMs = Date.now();
+    const windowDurationMs =
+      WINDOW_CONFIGS[getConfig().strategy.marketWindow]?.durationMs ??
+      5 * 60_000;
+
+    for (const state of this.activeMarkets.values()) {
+      if (state.btcPriceAtWindowStart !== null) continue;
+
+      const windowStartMs = state.endDate.getTime() - windowDurationMs;
+      if (nowMs < windowStartMs) continue; // window not open yet
+
+      const resolved =
+        this.btcWatcher.getPriceAt(windowStartMs) ??
+        this.btcWatcher.getCurrentPrice()?.price ??
+        null;
+
+      if (resolved === null) continue; // no BTC data yet
+
+      state.btcPriceAtWindowStart = resolved;
+      logger.info(
+        { marketId: state.marketId, btcPrice: resolved },
+        "btcPriceAtWindowStart filled",
+      );
+
+      // For relative Up/Down markets the window-start price is the target.
+      if (state.targetPrice === null) {
+        this.strategyEngine.updateTargetPrice(state.yesTokenId, resolved);
+        this.strategyEngine.updateTargetPrice(state.noTokenId, resolved);
+      }
+    }
   }
 
   /**
@@ -347,26 +344,17 @@ export class MarketOrchestrator extends EventEmitter {
 
     const endDate = market.endDate ? new Date(market.endDate) : new Date();
 
-    // Safety guard: skip markets whose trading window has already closed.
-    // The Gamma API may return markets with active=true/closed=false even when
-    // their endDate is months in the past (awaiting oracle resolution).
+    // Skip already-expired markets (Gamma may return old unresolved ones).
     if (endDate.getTime() < Date.now()) {
       logger.debug(
-        {
-          marketId: market.id,
-          endDate: endDate.toISOString(),
-          question: market.question,
-        },
-        "Skipping expired market (endDate in the past)",
+        { marketId: market.id, endDate: endDate.toISOString() },
+        "Skipping expired market",
       );
       return;
     }
 
-    // Capture the Chainlink BTC/USD price at the exact window-open second.
-    // For pre-discovered future windows (window hasn't started yet) we leave
-    // this null — using the current live price would be wrong. The btcPriceUpdate
-    // lazy fill (wireEvents) will set it once the first tick after windowStart
-    // arrives, using the history buffer to pinpoint the exact oracle snapshot.
+    // Pre-fill btcPriceAtWindowStart if the window is already open.
+    // If not, tryFillBtcWindowStart() will set it on the next CLOB/BTC tick.
     const windowDurationMs =
       WINDOW_CONFIGS[getConfig().strategy.marketWindow]?.durationMs ??
       5 * 60_000;
@@ -394,15 +382,15 @@ export class MarketOrchestrator extends EventEmitter {
     };
 
     this.activeMarkets.set(market.id, state);
+    this.tryFillBtcWindowStart();
 
-    // Build conditionId → marketId map for fast WS resolution matching
+    // Build conditionId → marketId lookup for WS resolution events.
     if (market.conditionId) {
       this.conditionIdMap.set(market.conditionId, market.id);
     }
 
-    // Register both outcome tokens with the strategy engine.
-    // For relative Up/Down markets (targetPrice=null), use btcPriceAtWindowStart
-    // as the effective target so that MIN_BTC_DISTANCE_USD can be applied correctly.
+    // Register both tokens with the strategy engine.
+    // effectiveTargetPrice is null for relative Up/Down markets until tryFillBtcWindowStart sets it.
     const effectiveTargetPrice = targetPrice ?? btcPriceAtWindowStart;
     for (let i = 0; i < tokenIds.length; i++) {
       this.strategyEngine.registerMarket(
@@ -438,7 +426,6 @@ export class MarketOrchestrator extends EventEmitter {
     const bestBid = parseFloat(ev.bestBid);
     const bestAsk = parseFloat(ev.bestAsk);
 
-    // Update local price state
     for (const state of this.activeMarkets.values()) {
       if (state.yesTokenId === tokenId || state.noTokenId === tokenId) {
         state.lastPrices[tokenId] = {
@@ -450,15 +437,13 @@ export class MarketOrchestrator extends EventEmitter {
       }
     }
 
-    // Feed to strategy engine
+    this.tryFillBtcWindowStart();
     this.strategyEngine.evaluatePrice(
       tokenId,
       bestBid,
       bestAsk,
       this.btcWatcher.getCurrentPrice(),
     );
-
-    // Check stop-loss for any open positions holding this token
     this.checkStopLoss(tokenId, bestBid);
   }
 
@@ -468,25 +453,25 @@ export class MarketOrchestrator extends EventEmitter {
   private onBestBidAskUpdate(ev: BestBidAskEvent): void {
     const bestBid = parseFloat(ev.bestBid);
     const bestAsk = parseFloat(ev.bestAsk);
-    const mid = (bestBid + bestAsk) / 2;
 
-    // Update local price state so getLiveMarkets() always has fresh prices
     for (const state of this.activeMarkets.values()) {
       if (state.yesTokenId === ev.tokenId || state.noTokenId === ev.tokenId) {
-        state.lastPrices[ev.tokenId] = { bid: bestBid, ask: bestAsk, mid };
+        state.lastPrices[ev.tokenId] = {
+          bid: bestBid,
+          ask: bestAsk,
+          mid: (bestBid + bestAsk) / 2,
+        };
         break;
       }
     }
 
-    // Also feed to strategy engine
+    this.tryFillBtcWindowStart();
     this.strategyEngine.evaluatePrice(
       ev.tokenId,
       bestBid,
       bestAsk,
       this.btcWatcher.getCurrentPrice(),
     );
-
-    // Check stop-loss for any open positions holding this token
     this.checkStopLoss(ev.tokenId, bestBid);
   }
 
@@ -556,8 +541,10 @@ export class MarketOrchestrator extends EventEmitter {
       if (!orderbookResult?.data || !orderbookResult.data.asks?.length) {
         logger.warn(
           { tokenId: opp.tokenId },
-          "No orderbook available — skipping",
+          "No orderbook available — will retry on next price update",
         );
+        // Reset so we retry on the next tick rather than missing this window.
+        this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
       const orderbook = orderbookResult.data;
@@ -586,29 +573,31 @@ export class MarketOrchestrator extends EventEmitter {
 
       if (execution.totalShares <= 0) {
         logger.warn(
-          { tokenId: opp.tokenId },
-          "No fill from simulation — skipping",
+          {
+            tokenId: opp.tokenId,
+            maxEntryPrice: config.strategy.maxEntryPrice,
+            bestAsk: opp.bestAsk,
+          },
+          "No fill — all asks above maxEntryPrice; will retry",
         );
+        this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
 
-      // Calculate expected profit
       const expectedProfit = calculateWinProfit(
         execution.averagePrice,
         execution.totalShares,
         execution.fees,
       );
 
-      // Skip if expected profit is negative or negligible
       if (expectedProfit < 0.001) {
         logger.debug(
           { expectedProfit, tokenId: opp.tokenId },
-          "Expected profit too small, skipping",
+          "Expected profit too small",
         );
         return;
       }
 
-      // Persist the simulated trade
       const tradeRow = await createSimulatedTrade({
         marketId: opp.marketId,
         tokenId: opp.tokenId,
@@ -640,10 +629,7 @@ export class MarketOrchestrator extends EventEmitter {
         marketEndDate: market?.endDate ?? new Date(),
       });
 
-      // Update strategy engine with position count
       this.strategyEngine.setOpenPositionCount(this.openPositions.size);
-
-      // Set up resolution monitoring if market has ended or will end soon
       this.scheduleResolutionMonitor(opp.marketId);
 
       await logAudit(
@@ -697,20 +683,9 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  // ============================================
-  // Stop-Loss Monitoring
-  // ============================================
+  // ── Stop-Loss ───────────────────────────────────────────────────────────────
 
-  /**
-   * Check if any open position holding `tokenId` should trigger stop-loss.
-   *
-   * Called on every price update. When the best bid drops below the
-   * configured stop-loss threshold, we simulate selling immediately
-   * to limit downside. This replaces waiting for full settlement at $0.
-   *
-   * Stop-loss is only active while the market is still tradable (before
-   * endDate). After endDate, the normal resolution flow handles the exit.
-   */
+  /** Trigger stop-loss for any open position on `tokenId` when bid falls below threshold. */
   private checkStopLoss(tokenId: string, bestBid: number): void {
     const config = getConfig();
     if (!config.strategy.stopLossEnabled) return;
@@ -718,8 +693,6 @@ export class MarketOrchestrator extends EventEmitter {
     for (const [tradeId, pos] of this.openPositions) {
       if (pos.tokenId !== tokenId) continue;
       if (pos.stopLossTriggered) continue;
-
-      // Only stop-loss while the market is still open for trading
       if (pos.marketEndDate.getTime() < Date.now()) continue;
 
       if (bestBid < config.strategy.stopLossThreshold) {
@@ -730,14 +703,11 @@ export class MarketOrchestrator extends EventEmitter {
             tokenId,
             bestBid: bestBid.toFixed(4),
             threshold: config.strategy.stopLossThreshold,
-            entryPrice: pos.entryPrice.toFixed(4),
           },
-          "🛑 Stop-loss triggered",
+          "Stop-loss triggered",
         );
-
         this.executeStopLoss(tradeId, pos, bestBid).catch((err) => {
           logger.error({ err, tradeId }, "Stop-loss execution failed");
-          // Reset flag to allow retry on next price update
           const position = this.openPositions.get(tradeId);
           if (position) position.stopLossTriggered = false;
         });
@@ -745,21 +715,12 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  /**
-   * Execute a stop-loss sell for an open position.
-   *
-   * 1. Fetches a fresh orderbook for the token
-   * 2. Simulates a limit sell (at any price — panic sell)
-   * 3. Calculates the realized PnL (partial loss instead of full loss)
-   * 4. Closes the position in the DB
-   */
   private async executeStopLoss(
     tradeId: string,
     pos: OpenPosition,
     triggerBid: number,
   ): Promise<void> {
     try {
-      // Fetch a fresh orderbook for accurate sell simulation
       const orderbookResult = await this.client.getOrderbook(pos.tokenId);
 
       let exitPrice: number;
@@ -773,24 +734,17 @@ export class MarketOrchestrator extends EventEmitter {
           feeRateBps = 25;
         }
 
-        // Simulate selling all shares at any available price (limitPrice=0)
         const sellResult = simulateLimitSell(
           orderbookResult.data,
           pos.entryShares,
-          0, // No minimum — sell at whatever bids exist
+          0, // panic sell — accept any bid
           feeRateBps,
         );
 
-        exitPrice = sellResult.averagePrice;
-        exitFees = sellResult.fees;
-
-        if (sellResult.totalSharesSold <= 0) {
-          // No bids available — fall back to using triggerBid as estimate
-          exitPrice = triggerBid;
-          exitFees = 0;
-        }
+        exitPrice =
+          sellResult.totalSharesSold > 0 ? sellResult.averagePrice : triggerBid;
+        exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
       } else {
-        // No orderbook available — use the trigger bid as estimated exit
         exitPrice = triggerBid;
       }
 

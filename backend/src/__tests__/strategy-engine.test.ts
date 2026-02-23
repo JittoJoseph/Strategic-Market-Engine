@@ -165,4 +165,77 @@ describe("StrategyEngine", () => {
     expect(opp.btcTargetPrice).toBe(97400);
     expect(opp.btcPrice).toBe(97500);
   });
+
+  it("does NOT trigger when targetPrice is null (btcPriceAtWindowStart not yet set)", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, null);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("triggers after updateTargetPrice fills the null target", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, null);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    // Should not fire — target is null
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).not.toHaveBeenCalled();
+
+    // Simulate tryFillBtcWindowStart setting the target
+    engine.updateTargetPrice("token-up", 97400);
+
+    // Now should fire — all conditions met
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("clearEvaluated allows retry after a failed opportunity attempt", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    // First trigger
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).toHaveBeenCalledOnce();
+
+    // Orchestrator calls clearEvaluated when no orderbook fill
+    engine.clearEvaluated("token-up");
+
+    // Should fire again on next price update
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("updateTargetPrice has no effect on unregistered token", () => {
+    // Should not throw
+    expect(() => engine.updateTargetPrice("nonexistent", 97000)).not.toThrow();
+  });
+
+  it("unregisterMarket clears evaluated state so token can re-trigger", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).toHaveBeenCalledOnce();
+
+    engine.unregisterMarket("token-up");
+
+    // Re-register (new window, same token)
+    engine.registerMarket("market-2", "token-up", "Up", endDate, 97400);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });
