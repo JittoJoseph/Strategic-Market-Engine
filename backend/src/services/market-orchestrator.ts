@@ -10,7 +10,7 @@ import {
   loadOpenTradesWithMarkets,
 } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, gte } from "drizzle-orm";
 
 import { getMarketScanner, MarketScanner } from "./market-scanner.js";
 import {
@@ -133,6 +133,12 @@ export class MarketOrchestrator extends EventEmitter {
 
     // Load any existing open trades from DB
     await this.loadOpenPositions();
+
+    // Load any existing active markets from DB
+    await this.loadActiveMarkets();
+
+    // Try to fill BTC prices for loaded markets
+    this.tryFillBtcWindowStart();
 
     // Wire up event handlers
     this.wireEvents();
@@ -1058,6 +1064,119 @@ export class MarketOrchestrator extends EventEmitter {
       logger.info(
         { count: rows.length },
         "Loaded existing open positions from database",
+      );
+    }
+  }
+
+  /**
+   * Load existing active markets from the database on startup.
+   * Only loads markets that are:
+   * - Active in DB
+   * - Match current window configuration
+   * - Have end dates in the future, or recently past if they have open positions
+   */
+  private async loadActiveMarkets(): Promise<void> {
+    const config = getConfig();
+    const windowConfig = WINDOW_CONFIGS[config.strategy.marketWindow];
+    const db = getDb();
+
+    // Load markets that are active and match our window type
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+    const marketRows = await db
+      .select()
+      .from(schema.markets)
+      .where(
+        and(
+          eq(schema.markets.active, true),
+          eq(schema.markets.windowType, config.strategy.marketWindow),
+          gte(schema.markets.endDate, cutoff.toISOString()),
+        ),
+      )
+      .orderBy(desc(schema.markets.endDate))
+      .limit(50);
+
+    for (const row of marketRows) {
+      // Skip if already loaded
+      if (this.activeMarkets.has(row.id)) continue;
+
+      const tokenIds = row.clobTokenIds as string[] | null;
+      const outcomes = row.outcomes as string[] | null;
+
+      if (!tokenIds || tokenIds.length < 2 || !outcomes || outcomes.length < 2) {
+        logger.warn(
+          { marketId: row.id },
+          "Skipping market with invalid token IDs or outcomes",
+        );
+        continue;
+      }
+
+      const endDate = row.endDate ? new Date(row.endDate) : new Date();
+      const targetPrice = row.targetPrice ? parseFloat(row.targetPrice) : null;
+
+      // Check if this market has open positions
+      const hasOpenPositions = Array.from(this.openPositions.values()).some(
+        (p) => p.marketId === row.id,
+      );
+
+      // Skip markets that ended more than 30 minutes ago and have no open positions
+      const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+      if (endDate.getTime() < thirtyMinutesAgo && !hasOpenPositions) {
+        continue;
+      }
+
+      const state: ActiveMarketState = {
+        marketId: row.id,
+        yesTokenId: tokenIds[0]!,
+        noTokenId: tokenIds[1]!,
+        question: row.question ?? "",
+        slug: row.slug ?? null,
+        endDate,
+        targetPrice,
+        btcPriceAtWindowStart: null, // Will be filled by tryFillBtcWindowStart
+        outcomes,
+        lastPrices: {},
+        subscribedWs: false,
+        resolved: false,
+      };
+
+      this.activeMarkets.set(row.id, state);
+
+      // Build conditionId → marketId lookup for WS resolution events
+      if (row.conditionId) {
+        this.conditionIdMap.set(row.conditionId, row.id);
+      }
+
+      // Register both tokens with the strategy engine
+      const effectiveTargetPrice = targetPrice ?? null; // btcPriceAtWindowStart will be set later
+      for (let i = 0; i < tokenIds.length; i++) {
+        this.strategyEngine.registerMarket(
+          row.id,
+          tokenIds[i]!,
+          outcomes[i] ?? `Outcome${i}`,
+          endDate,
+          effectiveTargetPrice,
+        );
+      }
+
+      // Subscribe to WebSocket for real-time data
+      this.wsWatcher.subscribe(tokenIds);
+      state.subscribedWs = true;
+
+      logger.info(
+        {
+          marketId: row.id,
+          question: row.question,
+          endDate: endDate.toISOString(),
+          hasOpenPositions,
+        },
+        "Loaded existing active market from database",
+      );
+    }
+
+    if (marketRows.length > 0) {
+      logger.info(
+        { count: marketRows.length, active: this.activeMarkets.size },
+        "Loaded existing active markets from database",
       );
     }
   }

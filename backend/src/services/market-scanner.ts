@@ -21,10 +21,11 @@ const logger = createModuleLogger("market-scanner");
  * 5-minute boundaries:
  *   windowStart = Math.floor(now / 300) * 300
  *
- * On every scan cycle we compute the current + next N window slugs, fetch those
- * exact markets from the Gamma /markets API, catalog them in the DB, and emit
- * them for the orchestrator.  The orchestrator deduplicates via its own
- * activeMarkets Map — no in-memory knownMarketIds set needed here.
+ * On every scan cycle we compute the current + next N window slugs, PLUS
+ * recent past windows, fetch those exact markets from the Gamma /markets API,
+ * catalog them in the DB, and emit them for the orchestrator.  The orchestrator
+ * deduplicates via its own activeMarkets Map — no in-memory knownMarketIds set
+ * needed here.
  *
  * Emits:
  *   "newMarket" — { market: GammaMarket }
@@ -37,6 +38,8 @@ export class MarketScanner extends EventEmitter {
 
   /** How many future windows to pre-fetch alongside the current one */
   private static readonly LOOKAHEAD_WINDOWS = 3;
+  /** How many past windows to check for existing markets */
+  private static readonly LOOKBEHIND_WINDOWS = 2;
 
   constructor() {
     super();
@@ -57,6 +60,7 @@ export class MarketScanner extends EventEmitter {
         durationMs: windowConfig.durationMs,
         scanIntervalMs: config.strategy.scanIntervalMs,
         lookahead: MarketScanner.LOOKAHEAD_WINDOWS,
+        lookbehind: MarketScanner.LOOKBEHIND_WINDOWS,
       },
       "Starting market scanner (deterministic slug mode)",
     );
@@ -86,8 +90,8 @@ export class MarketScanner extends EventEmitter {
   }
 
   /**
-   * Compute deterministic window-start timestamps for the current + upcoming
-   * windows.  For 5M windows: floor(now / 300) * 300 = current window start.
+   * Compute deterministic window-start timestamps for past, current + upcoming
+   * windows. For 5M windows: floor(now / 300) * 300 = current window start.
    */
   private computeWindowSlugs(windowConfig: WindowConfig): string[] {
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -96,10 +100,19 @@ export class MarketScanner extends EventEmitter {
       Math.floor(nowSeconds / durationSeconds) * durationSeconds;
 
     const slugs: string[] = [];
+    
+    // Include recent past windows
+    for (let i = MarketScanner.LOOKBEHIND_WINDOWS; i > 0; i--) {
+      const windowStart = currentWindowStart - i * durationSeconds;
+      slugs.push(`${windowConfig.slugPrefix}-${windowStart}`);
+    }
+    
+    // Include current and future windows
     for (let i = 0; i < MarketScanner.LOOKAHEAD_WINDOWS; i++) {
       const windowStart = currentWindowStart + i * durationSeconds;
       slugs.push(`${windowConfig.slugPrefix}-${windowStart}`);
     }
+    
     return slugs;
   }
 

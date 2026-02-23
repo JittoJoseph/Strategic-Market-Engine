@@ -164,19 +164,27 @@ export class ApiServer {
       }
     });
 
-    // Active market — returns the primary market (ACTIVE window preferred,
-    // UPCOMING as fallback). Sources from in-memory orchestrator state so it
+    // Active market — returns the primary market (prioritizes by recency and status:
+    // ACTIVE > ENDED > UPCOMING). Sources from in-memory orchestrator state so it
     // includes real-time prices and btcPriceAtWindowStart. Returns 204 if none.
     this.app.get("/api/active-market", (_req, res) => {
       const orchestrator = getMarketOrchestrator();
       const liveMarkets = orchestrator.getLiveMarkets();
-      const primary =
-        liveMarkets.find((m) => m.status === "ACTIVE") ??
-        liveMarkets.find((m) => m.status === "UPCOMING");
-      if (!primary) {
+      
+      if (liveMarkets.length === 0) {
         res.status(204).end();
         return;
       }
+
+      // Sort by recency (most recent end date first)
+      liveMarkets.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
+
+      // Prioritize by status: ACTIVE > ENDED > UPCOMING
+      const primary =
+        liveMarkets.find((m) => m.status === "ACTIVE") ??
+        liveMarkets.find((m) => m.status === "ENDED") ??
+        liveMarkets[0]; // Most recent UPCOMING as fallback
+
       res.json(primary);
     });
 
