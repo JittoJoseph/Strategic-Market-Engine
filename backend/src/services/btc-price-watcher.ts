@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { createModuleLogger } from "../utils/logger.js";
-import { POLY_URLS } from "../types/index.js";
+import { POLY_URLS, type MomentumSignal } from "../types/index.js";
 import type { BtcPriceData } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("btc-price-watcher");
@@ -82,13 +82,22 @@ export class BtcPriceWatcher extends EventEmitter {
 
     if (best) {
       logger.debug(
-        { targetMs, foundTs: best.timestamp, price: best.price, ageMs: Date.now() - best.timestamp },
-        "Found historical BTC price"
+        {
+          targetMs,
+          foundTs: best.timestamp,
+          price: best.price,
+          ageMs: Date.now() - best.timestamp,
+        },
+        "Found historical BTC price",
       );
     } else {
       logger.warn(
-        { targetMs, historySize: this.priceHistory.length, oldestTs: this.priceHistory[0]?.timestamp },
-        "No historical BTC price found for target time"
+        {
+          targetMs,
+          historySize: this.priceHistory.length,
+          oldestTs: this.priceHistory[0]?.timestamp,
+        },
+        "No historical BTC price found for target time",
       );
     }
 
@@ -97,6 +106,60 @@ export class BtcPriceWatcher extends EventEmitter {
 
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Compute BTC momentum over the last `lookbackMs` milliseconds.
+   *
+   * Uses the existing priceHistory rolling buffer — no additional data sources.
+   * Finds the best historical price at or before `now - lookbackMs`, then
+   * computes the USD delta to the current price.
+   *
+   * Returns NEUTRAL when:
+   *   - Insufficient history (< 2 ticks)
+   *   - Absolute change is below `minChangeUsd` (sideways chop)
+   */
+  getMomentum(
+    lookbackMs: number,
+    minChangeUsd: number = 30,
+  ): MomentumSignal {
+    const now = Date.now();
+    const cutoff = now - lookbackMs;
+
+    if (this.priceHistory.length < 2 || this.currentPrice === null) {
+      return { direction: "NEUTRAL", changeUsd: 0, lookbackMs, hasData: false };
+    }
+
+    // Find the most recent price at or before the cutoff (i.e. the price
+    // `lookbackMs` ago). Walk backwards for efficiency since history is sorted
+    // by insertion time (ascending).
+    let historical: { price: number; timestamp: number } | null = null;
+    for (let i = this.priceHistory.length - 1; i >= 0; i--) {
+      const entry = this.priceHistory[i]!;
+      if (entry.timestamp <= cutoff) {
+        historical = entry;
+        break;
+      }
+    }
+
+    if (!historical) {
+      // All history is within the lookback window — use oldest available as proxy
+      historical = this.priceHistory[0]!;
+    }
+
+    const changeUsd = this.currentPrice - historical.price;
+    const absChange = Math.abs(changeUsd);
+
+    let direction: MomentumSignal["direction"];
+    if (absChange < minChangeUsd) {
+      direction = "NEUTRAL"; // BTC is ranging — no clear edge
+    } else if (changeUsd > 0) {
+      direction = "UP";
+    } else {
+      direction = "DOWN";
+    }
+
+    return { direction, changeUsd, lookbackMs, hasData: true };
   }
 
   private setPrice(price: number, _rtdsTimestamp: number): void {
@@ -195,7 +258,10 @@ export class BtcPriceWatcher extends EventEmitter {
 
           // Handle Chainlink backfill (comes through crypto_prices topic with type="subscribe")
           if (topic === "crypto_prices" && msg.type === "subscribe") {
-            if (payload?.["symbol"] === "btc/usd" && Array.isArray(payload["data"])) {
+            if (
+              payload?.["symbol"] === "btc/usd" &&
+              Array.isArray(payload["data"])
+            ) {
               for (const item of payload["data"]) {
                 if (
                   item &&
@@ -203,7 +269,10 @@ export class BtcPriceWatcher extends EventEmitter {
                   typeof (item as any).timestamp === "number" &&
                   typeof (item as any).value === "number"
                 ) {
-                  this.setPrice((item as any).value as number, (item as any).timestamp as number);
+                  this.setPrice(
+                    (item as any).value as number,
+                    (item as any).timestamp as number,
+                  );
                 }
               }
               return;

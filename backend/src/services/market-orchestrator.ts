@@ -193,6 +193,13 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   getStats() {
+    const config = getConfig();
+    const momentum = config.strategy.momentumEnabled
+      ? this.btcWatcher.getMomentum(
+          config.strategy.momentumLookbackMs,
+          config.strategy.momentumMinChangeUsd,
+        )
+      : null;
     return {
       running: this.running,
       paused: this.paused,
@@ -206,6 +213,7 @@ export class MarketOrchestrator extends EventEmitter {
       strategy: this.strategyEngine.getStats(),
       btcConnected: this.btcWatcher.isConnected(),
       btcPrice: this.btcWatcher.getCurrentPrice()?.price ?? null,
+      momentum,
     };
   }
 
@@ -317,7 +325,7 @@ export class MarketOrchestrator extends EventEmitter {
         if (resolved !== null) {
           logger.info(
             { marketId: state.marketId, windowStartMs, btcPrice: resolved },
-            "Using current BTC price for restarted market (no historical data available)"
+            "Using current BTC price for restarted market (no historical data available)",
           );
         }
       }
@@ -453,11 +461,19 @@ export class MarketOrchestrator extends EventEmitter {
     }
 
     this.tryFillBtcWindowStart();
+    const config = getConfig();
+    const momentumSignal = config.strategy.momentumEnabled
+      ? this.btcWatcher.getMomentum(
+          config.strategy.momentumLookbackMs,
+          config.strategy.momentumMinChangeUsd,
+        )
+      : null;
     this.strategyEngine.evaluatePrice(
       tokenId,
       bestBid,
       bestAsk,
       this.btcWatcher.getCurrentPrice(),
+      momentumSignal,
     );
     this.checkStopLoss(tokenId, bestBid);
   }
@@ -481,11 +497,19 @@ export class MarketOrchestrator extends EventEmitter {
     }
 
     this.tryFillBtcWindowStart();
+    const config = getConfig();
+    const momentumSignal = config.strategy.momentumEnabled
+      ? this.btcWatcher.getMomentum(
+          config.strategy.momentumLookbackMs,
+          config.strategy.momentumMinChangeUsd,
+        )
+      : null;
     this.strategyEngine.evaluatePrice(
       ev.tokenId,
       bestBid,
       bestAsk,
       this.btcWatcher.getCurrentPrice(),
+      momentumSignal,
     );
     this.checkStopLoss(ev.tokenId, bestBid);
   }

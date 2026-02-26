@@ -90,6 +90,12 @@ export interface SystemStats {
     };
     btcConnected: boolean;
     btcPrice: number | null;
+    momentum: {
+      direction: "UP" | "DOWN" | "NEUTRAL";
+      changeUsd: number;
+      lookbackMs: number;
+      hasData: boolean;
+    } | null;
   };
   liveMarkets: LiveMarketInfo[];
   btcPrice: { price: number; timestamp: number } | null;
@@ -103,7 +109,37 @@ export interface SystemStats {
     minBtcDistanceUsd: number;
     stopLossEnabled: boolean;
     stopLossThreshold: number;
+    momentumEnabled?: boolean;
+    momentumLookbackMs?: number;
+    momentumMinChangeUsd?: number;
   };
+}
+
+// ============================================
+// Activity log (unified trade events + audit)
+// ============================================
+
+export type ActivityKind =
+  | "TRADE_OPENED"
+  | "TRADE_WIN"
+  | "TRADE_LOSS"
+  | "MOMENTUM_SKIP"
+  | "MARKET_RESOLVED"
+  | "SYSTEM"
+  | "INFO"
+  | "WARN"
+  | "ERROR";
+
+export interface ActivityEntry {
+  id: string;
+  kind: ActivityKind;
+  title: string;
+  detail: string;
+  ts: number; // wall-clock ms
+  /** Optional trade data for TRADE_* kinds */
+  trade?: SimulatedTrade;
+  /** PnL for TRADE_WIN / TRADE_LOSS */
+  pnl?: number;
 }
 
 // ============================================

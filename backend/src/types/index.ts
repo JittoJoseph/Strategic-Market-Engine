@@ -71,6 +71,21 @@ export const POLY_URLS = {
 } as const;
 
 // ============================================
+// Momentum Signal
+// ============================================
+
+export interface MomentumSignal {
+  /** Net direction of BTC over the lookback window */
+  direction: "UP" | "DOWN" | "NEUTRAL";
+  /** Raw USD change over lookback window (positive = up, negative = down) */
+  changeUsd: number;
+  /** Lookback window in milliseconds */
+  lookbackMs: number;
+  /** Whether enough historical data exists to compute signal */
+  hasData: boolean;
+}
+
+// ============================================
 // Fee Constants (from Polymarket docs)
 // For 5-Min & 15-Min Crypto markets:
 //   fee = C × feeRate × (p × (1-p))^exponent
@@ -104,6 +119,10 @@ export const ConfigSchema = z.object({
     scanIntervalMs: z.number().min(10000),
     stopLossEnabled: z.boolean(),
     stopLossThreshold: z.number().min(0.01).max(0.95),
+    // Momentum filter
+    momentumEnabled: z.boolean(),
+    momentumLookbackMs: z.number().min(10_000).max(600_000),
+    momentumMinChangeUsd: z.number().min(0).max(1000),
   }),
   wipe: z.object({
     password: z.string().min(1),

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { StrategyEngine } from "../services/strategy-engine.js";
+import type { MomentumSignal } from "../types/index.js";
 
 // Mock the logger module before importing strategy engine
 vi.mock("../utils/logger.js", () => {
@@ -32,6 +33,9 @@ vi.mock("../utils/config.js", () => ({
       scanIntervalMs: 30000,
       stopLossEnabled: false,
       stopLossThreshold: 0.85,
+      momentumEnabled: true,
+      momentumLookbackMs: 90_000,
+      momentumMinChangeUsd: 30,
     },
     simulation: { amountUsd: 1 },
     logging: { level: "silent" },
@@ -39,31 +43,75 @@ vi.mock("../utils/config.js", () => ({
   }),
 }));
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function makeMomentum(
+  direction: MomentumSignal["direction"],
+  changeUsd = 50,
+): MomentumSignal {
+  return {
+    direction,
+    changeUsd: direction === "DOWN" ? -changeUsd : changeUsd,
+    lookbackMs: 90_000,
+    hasData: true,
+  };
+}
+
+const btcPrice = { price: 97500, timestamp: Date.now() };
+const upMomentum = makeMomentum("UP");
+const downMomentum = makeMomentum("DOWN");
+const neutralMomentum: MomentumSignal = {
+  direction: "NEUTRAL",
+  changeUsd: 10,
+  lookbackMs: 90_000,
+  hasData: true,
+};
+const noDataMomentum: MomentumSignal = {
+  direction: "NEUTRAL",
+  changeUsd: 0,
+  lookbackMs: 90_000,
+  hasData: false,
+};
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
 describe("StrategyEngine", () => {
   let engine: StrategyEngine;
-  const btcPrice = { price: 97500, timestamp: Date.now() };
 
   beforeEach(() => {
     engine = new StrategyEngine();
   });
 
-  it("emits opportunityDetected when all conditions met", () => {
-    const endDate = new Date(Date.now() + 30_000); // 30s from now
+  // ── Core threshold / timing tests ────────────────────────────────────────
+
+  it("emits opportunityDetected when all conditions met (UP+UP)", () => {
+    const endDate = new Date(Date.now() + 30_000);
     engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
 
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    // midpoint = (0.94 + 0.96) / 2 = 0.95 ≥ threshold
-    engine.evaluatePrice("token-up", 0.94, 0.96, btcPrice);
+    // midpoint = (0.94 + 0.96) / 2 = 0.95 ≥ threshold, momentum UP
+    engine.evaluatePrice("token-up", 0.94, 0.96, btcPrice, upMomentum);
 
     expect(handler).toHaveBeenCalledOnce();
     const opp = handler.mock.calls[0][0];
     expect(opp.tokenId).toBe("token-up");
     expect(opp.outcomeLabel).toBe("Up");
     expect(opp.midpoint).toBeCloseTo(0.95, 4);
-    expect(opp.bestAsk).toBe(0.96);
-    expect(opp.bestBid).toBe(0.94);
+    expect(opp.momentum?.direction).toBe("UP");
+  });
+
+  it("emits opportunityDetected for DOWN outcome with DOWN momentum", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-down", "Down", endDate, 97600);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-down", 0.94, 0.96, btcPrice, downMomentum);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler.mock.calls[0][0].momentum?.direction).toBe("DOWN");
   });
 
   it("does NOT trigger when midpoint is below threshold", () => {
@@ -74,7 +122,20 @@ describe("StrategyEngine", () => {
     engine.on("opportunityDetected", handler);
 
     // midpoint = (0.90 + 0.94) / 2 = 0.92 < 0.95
-    engine.evaluatePrice("token-up", 0.9, 0.94, btcPrice);
+    engine.evaluatePrice("token-up", 0.9, 0.94, btcPrice, upMomentum);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does NOT trigger when midpoint is above maxEntryPrice ceiling (0.97)", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    // midpoint = (0.97 + 0.99) / 2 = 0.98 > 0.97 maxEntryPrice
+    engine.evaluatePrice("token-up", 0.97, 0.99, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -86,7 +147,7 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -99,7 +160,7 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -112,7 +173,7 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -124,12 +185,10 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    // First trigger
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce();
 
-    // Second evaluation — should NOT trigger again
-    engine.evaluatePrice("token-up", 0.97, 0.99, btcPrice);
+    engine.evaluatePrice("token-up", 0.97, 0.99, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce(); // Still only 1 call
   });
 
@@ -140,14 +199,12 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce();
 
-    // Reset for new window
     engine.resetForNewWindow();
 
-    // Re-evaluate — should trigger again
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
@@ -158,7 +215,7 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     const opp = handler.mock.calls[0][0];
     expect(opp.btcDistanceUsd).toBeCloseTo(100, 0); // |97500 - 97400| = 100
@@ -173,7 +230,7 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -185,15 +242,12 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    // Should not fire — target is null
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).not.toHaveBeenCalled();
 
-    // Simulate tryFillBtcWindowStart setting the target
     engine.updateTargetPrice("token-up", 97400);
 
-    // Now should fire — all conditions met
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce();
   });
 
@@ -204,20 +258,16 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    // First trigger
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce();
 
-    // Orchestrator calls clearEvaluated when no orderbook fill
     engine.clearEvaluated("token-up");
 
-    // Should fire again on next price update
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it("updateTargetPrice has no effect on unregistered token", () => {
-    // Should not throw
     expect(() => engine.updateTargetPrice("nonexistent", 97000)).not.toThrow();
   });
 
@@ -228,14 +278,93 @@ describe("StrategyEngine", () => {
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledOnce();
 
     engine.unregisterMarket("token-up");
 
-    // Re-register (new window, same token)
     engine.registerMarket("market-2", "token-up", "Up", endDate, 97400);
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice);
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  // ── Momentum filter tests ─────────────────────────────────────────────────
+
+  it("BLOCKS UP entry when momentum is DOWN", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, downMomentum);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS DOWN entry when momentum is UP", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-down", "Down", endDate, 97600);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-down", 0.96, 0.98, btcPrice, upMomentum);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS entry when momentum is NEUTRAL (BTC ranging)", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, neutralMomentum);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS entry when momentum has no data (insufficient history)", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, noDataMomentum);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWS entry when no momentum signal passed (momentum disabled path)", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    // null signal = momentum disabled; should still fire
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, null);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler.mock.calls[0][0].momentum).toBeNull();
+  });
+
+  it("opportunity includes momentum signal data", () => {
+    const endDate = new Date(Date.now() + 30_000);
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
+
+    const handler = vi.fn();
+    engine.on("opportunityDetected", handler);
+
+    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
+
+    const opp = handler.mock.calls[0][0];
+    expect(opp.momentum).not.toBeNull();
+    expect(opp.momentum.direction).toBe("UP");
+    expect(opp.momentum.changeUsd).toBeGreaterThan(0);
+    expect(opp.momentum.hasData).toBe(true);
   });
 });

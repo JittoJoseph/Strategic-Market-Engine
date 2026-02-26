@@ -156,6 +156,9 @@ export class ApiServer {
             minBtcDistanceUsd: config.strategy.minBtcDistanceUsd,
             stopLossEnabled: config.strategy.stopLossEnabled,
             stopLossThreshold: config.strategy.stopLossThreshold,
+            momentumEnabled: config.strategy.momentumEnabled,
+            momentumLookbackMs: config.strategy.momentumLookbackMs,
+            momentumMinChangeUsd: config.strategy.momentumMinChangeUsd,
           },
         });
       } catch (error) {

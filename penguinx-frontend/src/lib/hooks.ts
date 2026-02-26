@@ -9,6 +9,7 @@ import type {
   DiscoveredMarket,
   PerformanceMetrics,
   AuditLog,
+  ActivityEntry,
   WsMessage,
 } from "./types";
 
@@ -371,3 +372,142 @@ export function useSystemStatus() {
 
   return { backendActive, wsConnected };
 }
+
+// ── helper: map AuditLog → ActivityEntry ─────────────────────────────────────
+function auditLogToActivity(log: AuditLog): ActivityEntry {
+  const cat = log.category?.toUpperCase() ?? "";
+  let kind: ActivityEntry["kind"] = "INFO";
+  if (cat.includes("TRADE_RESOLVED") || cat.includes("TRADE_SETTLED"))
+    kind = "TRADE_WIN"; // will be refined below by level
+  else if (cat.includes("TRADE_OPENED")) kind = "TRADE_OPENED";
+  else if (cat.includes("TRADE_FORCE") || cat.includes("LOSS")) kind = "TRADE_LOSS";
+  else if (cat.includes("SKIP") || cat.includes("MOMENTUM")) kind = "MOMENTUM_SKIP";
+  else if (cat.includes("MARKET")) kind = "MARKET_RESOLVED";
+  else if (log.level === "warn") kind = "WARN";
+  else if (log.level === "error") kind = "ERROR";
+
+  // Refine TRADE_RESOLVED: look at metadata for outcome
+  if (kind === "TRADE_WIN" && log.metadata) {
+    const outcome = (log.metadata as any)?.outcome as string | undefined;
+    if (outcome === "LOSS") kind = "TRADE_LOSS";
+  }
+
+  const pnl =
+    log.metadata && typeof (log.metadata as any).pnl === "number"
+      ? (log.metadata as any).pnl
+      : undefined;
+
+  return {
+    id: log.id,
+    kind,
+    title: log.category ?? "EVENT",
+    detail: log.message,
+    ts: new Date(log.createdAt).getTime(),
+    pnl,
+  };
+}
+
+const MAX_ACTIVITY_ENTRIES = 100;
+
+/**
+ * Activity log hook.
+ *
+ * - Seeds from GET /api/audit?limit=30 at mount (one-time REST call)
+ * - Appends real-time entries from `tradeOpened` and `tradeResolved` WS events
+ * - Never polls the API again after initial load
+ * - Capped at MAX_ACTIVITY_ENTRIES to prevent unbounded growth
+ */
+export function useActivityLog() {
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const seenIds = useRef<Set<string>>(new Set());
+
+  // One-time REST seed on mount
+  useEffect(() => {
+    let cancelled = false;
+    getApiClient()
+      .getAuditLogs({ limit: 30 })
+      .then((logs) => {
+        if (cancelled) return;
+        const entries = logs
+          .map(auditLogToActivity)
+          .sort((a, b) => b.ts - a.ts); // newest first
+        entries.forEach((e) => seenIds.current.add(e.id));
+        setActivities(entries);
+      })
+      .catch(() => {/* silently skip if backend not ready */})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Real-time: tradeOpened
+  useEffect(() => {
+    const ws = getWsClient();
+    ws.connect();
+
+    const unsubOpened = ws.on("tradeOpened", (msg: WsMessage) => {
+      const trade = (msg.data as any)?.trade as SimulatedTrade | undefined;
+      if (!trade) return;
+      const id = `opened-${trade.id}`;
+      if (seenIds.current.has(id)) return;
+      seenIds.current.add(id);
+
+      const outcome = trade.outcomeLabel ?? "??";
+      const price = trade.entryPrice ? `@${(parseFloat(trade.entryPrice) * 100).toFixed(1)}¢` : "";
+      const btc = trade.btcPriceAtEntry ? ` BTC $${parseFloat(trade.btcPriceAtEntry).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "";
+      const momentum = (trade as any).momentum;
+      const momStr = momentum ? ` mom:${momentum.direction}` : "";
+
+      const entry: ActivityEntry = {
+        id,
+        kind: "TRADE_OPENED",
+        title: "TRADE OPENED",
+        detail: `${outcome} ${price}${btc}${momStr} — $${trade.simulatedUsdAmount}`,
+        ts: Date.now(),
+        trade,
+      };
+
+      setActivities((prev) => [entry, ...prev].slice(0, MAX_ACTIVITY_ENTRIES));
+    });
+
+    // Real-time: tradeResolved
+    const unsubResolved = ws.on("tradeResolved", (msg: WsMessage) => {
+      const d = msg.data as any;
+      const trade = d?.trade as SimulatedTrade | undefined;
+      const isWin = d?.isWin as boolean | undefined;
+      const pnl = typeof d?.pnl === "number" ? d.pnl as number : undefined;
+
+      const id = `resolved-${trade?.id ?? Date.now()}`;
+      if (seenIds.current.has(id)) return;
+      seenIds.current.add(id);
+
+      const kind: ActivityEntry["kind"] = isWin ? "TRADE_WIN" : "TRADE_LOSS";
+      const outcome = trade?.outcomeLabel ?? "??";
+      const pnlStr = pnl !== undefined
+        ? ` PnL: ${pnl >= 0 ? "+" : ""}$${Math.abs(pnl).toFixed(4)}`
+        : "";
+
+      const entry: ActivityEntry = {
+        id,
+        kind,
+        title: isWin ? "TRADE WIN ✅" : "TRADE LOSS ❌",
+        detail: `${outcome}${pnlStr}`,
+        ts: Date.now(),
+        trade,
+        pnl,
+      };
+
+      setActivities((prev) => [entry, ...prev].slice(0, MAX_ACTIVITY_ENTRIES));
+    });
+
+    return () => {
+      unsubOpened();
+      unsubResolved();
+    };
+  }, []);
+
+  return { activities, loading };
+}
+

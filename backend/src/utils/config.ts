@@ -37,17 +37,18 @@ export function loadConfig(): Config {
     },
     strategy: {
       marketWindow: env("MARKET_WINDOW", "5M"),
-      tradeFromWindowSeconds: envNum("TRADE_FROM_WINDOW_SECONDS", 30),
-      entryPriceThreshold: envNum("ENTRY_PRICE_THRESHOLD", 0.95),
-      maxEntryPrice: envNum(
-        "MAX_ENTRY_PRICE",
-        envNum("ENTRY_PRICE_THRESHOLD", 0.95),
-      ),
-      maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 5),
+      tradeFromWindowSeconds: envNum("TRADE_FROM_WINDOW_SECONDS", 60),
+      entryPriceThreshold: envNum("ENTRY_PRICE_THRESHOLD", 0.94),
+      maxEntryPrice: envNum("MAX_ENTRY_PRICE", 0.97),
+      maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 3),
       minBtcDistanceUsd: envNum("MIN_BTC_DISTANCE_USD", 50),
-      scanIntervalMs: envNum("SCAN_INTERVAL_MS", 30000),
-      stopLossEnabled: envBool("STOP_LOSS_ENABLED", true),
+      scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60_000),
+      stopLossEnabled: envBool("STOP_LOSS_ENABLED", false),
       stopLossThreshold: envNum("STOP_LOSS_THRESHOLD", 0.85),
+      // Momentum filter
+      momentumEnabled: envBool("MOMENTUM_ENABLED", true),
+      momentumLookbackMs: envNum("MOMENTUM_LOOKBACK_MS", 90_000),
+      momentumMinChangeUsd: envNum("MOMENTUM_MIN_CHANGE_USD", 30),
     },
     wipe: {
       password: env("WIPE_PASSWORD"),
