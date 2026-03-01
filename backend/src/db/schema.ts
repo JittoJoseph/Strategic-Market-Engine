@@ -100,6 +100,11 @@ export const simulatedTrades = pgTable(
     exitTs: timestamp("exit_ts"),
     exitOutcome: text("exit_outcome"), // WIN | LOSS
     realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }),
+    /** Lowest bestBid observed while position was open (before window close) */
+    minPriceDuringPosition: decimal("min_price_during_position", {
+      precision: 18,
+      scale: 8,
+    }),
     // Status
     status: text("status").default("OPEN").notNull(),
     orderbookSnapshot: jsonb("orderbook_snapshot"),

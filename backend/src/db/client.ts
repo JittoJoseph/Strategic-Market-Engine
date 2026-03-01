@@ -230,6 +230,7 @@ export async function resolveTrade(
   outcome: "WIN" | "LOSS",
   realizedPnl: string,
   exitPrice?: string,
+  minPriceDuringPosition?: string,
 ) {
   const database = getDb();
   const finalExitPrice = exitPrice ?? (outcome === "WIN" ? "1" : "0");
@@ -243,6 +244,7 @@ export async function resolveTrade(
       realizedPnl,
       status: "SETTLED",
       updatedAt: new Date(),
+      ...(minPriceDuringPosition != null ? { minPriceDuringPosition } : {}),
     })
     .where(eq(schema.simulatedTrades.id, id))
     .returning();

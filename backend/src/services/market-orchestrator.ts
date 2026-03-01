@@ -73,6 +73,8 @@ interface OpenPosition {
   /** Total cash spent on this position (shares × avgPrice + fees). Used for cost-basis portfolio value. */
   actualCost: number;
   marketEndDate: Date;
+  /** Lowest bestBid observed while position is open (before window close). Initialised to entryPrice. */
+  minPriceDuringPosition: number;
   /** Prevents concurrent stop-loss execution for the same position */
   stopLossTriggered?: boolean;
 }
@@ -526,11 +528,20 @@ export class MarketOrchestrator extends EventEmitter {
           // Market window ended — freeze prices until trade is settled
           break;
         }
+        const mid = (bestBid + bestAsk) / 2;
         state.lastPrices[tokenId] = {
           bid: bestBid,
           ask: bestAsk,
-          mid: (bestBid + bestAsk) / 2,
+          mid,
         };
+        // Track lowest bestBid for every open position on this token.
+        // bestBid is the same value that triggers stop-loss, so tracking it
+        // here lets us later calibrate the stop-loss threshold from real data.
+        for (const pos of this.openPositions.values()) {
+          if (pos.tokenId === tokenId && bestBid < pos.minPriceDuringPosition) {
+            pos.minPriceDuringPosition = bestBid;
+          }
+        }
         break;
       }
     }
@@ -731,6 +742,7 @@ export class MarketOrchestrator extends EventEmitter {
         fees: execution.fees,
         actualCost,
         marketEndDate: market?.endDate ?? new Date(),
+        minPriceDuringPosition: execution.averagePrice, // start at entry
       });
 
       this.strategyEngine.setOpenPositionCount(this.openPositions.size);
@@ -894,7 +906,13 @@ export class MarketOrchestrator extends EventEmitter {
         await this.portfolioManager.addCash(sellProceeds);
       }
 
-      await resolveTrade(tradeId, "LOSS", pnl.toFixed(6), exitPrice.toFixed(6));
+      await resolveTrade(
+        tradeId,
+        "LOSS",
+        pnl.toFixed(6),
+        exitPrice.toFixed(6),
+        pos.minPriceDuringPosition.toFixed(8),
+      );
       this.openPositions.delete(tradeId);
       this.strategyEngine.setOpenPositionCount(this.openPositions.size);
 
@@ -1086,6 +1104,7 @@ export class MarketOrchestrator extends EventEmitter {
         isWin ? "WIN" : "LOSS",
         pnl.toFixed(6),
         exitPrice.toFixed(6),
+        pos.minPriceDuringPosition.toFixed(8),
       );
 
       await logAudit(
@@ -1158,7 +1177,13 @@ export class MarketOrchestrator extends EventEmitter {
         pos.fees,
       );
 
-      await resolveTrade(tradeId, "LOSS", pnl.toFixed(6), "0");
+      await resolveTrade(
+        tradeId,
+        "LOSS",
+        pnl.toFixed(6),
+        "0",
+        pos.minPriceDuringPosition.toFixed(8),
+      );
       this.openPositions.delete(tradeId);
 
       await logAudit(
@@ -1202,6 +1227,10 @@ export class MarketOrchestrator extends EventEmitter {
         fees: parseFloat(trade.entryFees ?? "0"),
         actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
+        // Restore from DB if saved; otherwise start at entry price
+        minPriceDuringPosition: parseFloat(
+          trade.minPriceDuringPosition ?? trade.entryPrice,
+        ),
       });
 
       // Set up resolution monitoring for existing positions

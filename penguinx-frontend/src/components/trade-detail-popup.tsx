@@ -121,6 +121,28 @@ export function TradeDetailPopup({
                 value={`$${parseFloat(trade.actualCost).toFixed(4)}`}
               />
               <Row label="Entry Fees" value={`$${entryFees.toFixed(6)}`} />
+              {trade.minPriceDuringPosition && (
+                <Row
+                  label="Min Price (window)"
+                  value={
+                    <span className="text-amber-400">
+                      {Math.round(
+                        parseFloat(trade.minPriceDuringPosition) * 100,
+                      )}
+                      ¢
+                      <span className="text-muted-foreground/50 ml-1 text-[10px]">
+                        (Δ
+                        {Math.round(
+                          (entryPrice -
+                            parseFloat(trade.minPriceDuringPosition)) *
+                            100,
+                        )}
+                        ¢ from entry)
+                      </span>
+                    </span>
+                  }
+                />
+              )}
             </Section>
 
             {/* Momentum Context */}
