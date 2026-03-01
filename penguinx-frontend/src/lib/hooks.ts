@@ -280,16 +280,21 @@ export function usePerformanceRealtime(
     const ws = getWsClient();
     ws.connect();
 
-    // Handle tradeOpened: increment open positions
+    // Handle tradeOpened: increment open positions, deduct cost from cash, add to investedAmount
     const unsubOpened = ws.on("tradeOpened", (msg: WsMessage) => {
       const trade = (msg.data as any)?.trade as SimulatedTrade | undefined;
       if (!trade) return;
 
       setPerformance((prev) => {
         if (!prev) return prev;
+        const actualCost = parseFloat(trade.actualCost || "0");
+        const oldCash = parseFloat(prev.cashBalance || "0");
+        const oldPositionsValue = parseFloat(prev.openPositionsValue || "0");
         return {
           ...prev,
           openPositions: prev.openPositions + 1,
+          cashBalance: Math.max(0, oldCash - actualCost).toFixed(2),
+          openPositionsValue: (oldPositionsValue + actualCost).toFixed(2),
         };
       });
     });

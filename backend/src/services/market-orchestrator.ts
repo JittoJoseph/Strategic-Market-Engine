@@ -70,6 +70,8 @@ interface OpenPosition {
   entryPrice: number;
   entryShares: number;
   fees: number;
+  /** Total cash spent on this position (shares × avgPrice + fees). Used for cost-basis portfolio value. */
+  actualCost: number;
   marketEndDate: Date;
   /** Prevents concurrent stop-loss execution for the same position */
   stopLossTriggered?: boolean;
@@ -284,17 +286,14 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   /**
-   * Estimate the total USD value of all open positions using latest bid prices.
-   * value = sum( shares × currentBid ) for each open position.
+   * Returns the total cost basis of all open positions (cash invested, not mark-to-market).
+   * value = sum( actualCost ) for each open position.
+   * This gives the "invested amount" for portfolio display: cashBalance + openPositionsValue = total capital deployed.
    */
   computeOpenPositionsValue(): number {
     let total = 0;
     for (const pos of this.openPositions.values()) {
-      // Look up current bid from the active market's last prices
-      const market = this.activeMarkets.get(pos.marketId);
-      const tokenPrices = market?.lastPrices[pos.tokenId];
-      const currentBid = tokenPrices?.bid ?? pos.entryPrice; // fallback to entry
-      total += pos.entryShares * currentBid;
+      total += pos.actualCost;
     }
     return total;
   }
@@ -501,9 +500,15 @@ export class MarketOrchestrator extends EventEmitter {
     bestBid: number,
     bestAsk: number,
   ): void {
-    // Update cached price for this token
+    // Update cached price for this token — skip if the market window has ended.
+    // After window close, Polymarket CLOB reports ~$0.50 (undecided state) which
+    // would show misleading unrealised PnL while we wait for oracle settlement.
     for (const state of this.activeMarkets.values()) {
       if (state.yesTokenId === tokenId || state.noTokenId === tokenId) {
+        if (state.endDate <= new Date()) {
+          // Market window ended — freeze prices until trade is settled
+          break;
+        }
         state.lastPrices[tokenId] = {
           bid: bestBid,
           ask: bestAsk,
@@ -707,6 +712,7 @@ export class MarketOrchestrator extends EventEmitter {
         entryPrice: execution.averagePrice,
         entryShares: execution.totalShares,
         fees: execution.fees,
+        actualCost,
         marketEndDate: market?.endDate ?? new Date(),
       });
 
@@ -1177,6 +1183,7 @@ export class MarketOrchestrator extends EventEmitter {
         entryPrice: parseFloat(trade.entryPrice),
         entryShares: parseFloat(trade.entryShares),
         fees: parseFloat(trade.entryFees ?? "0"),
+        actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
       });
 
