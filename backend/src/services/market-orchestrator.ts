@@ -102,6 +102,8 @@ export class MarketOrchestrator extends EventEmitter {
   /** conditionId → marketId for O(1) lookup on WS market_resolved events */
   private conditionIdMap: Map<string, string> = new Map();
   private openPositions: Map<string, OpenPosition> = new Map();
+  /** tokenIds currently being processed by onOpportunity — blocks concurrent duplicate executions */
+  private inFlightTokenIds: Set<string> = new Set();
   private resolutionTimers: Map<string, ReturnType<typeof setInterval>> =
     new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -625,6 +627,18 @@ export class MarketOrchestrator extends EventEmitter {
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
     if (this.paused) return;
 
+    // Guard against concurrent executions for the same token (race condition
+    // where two price-update events fire close together before the first
+    // async DB insert completes, causing a unique-constraint violation).
+    if (this.inFlightTokenIds.has(opp.tokenId)) {
+      logger.debug(
+        { tokenId: opp.tokenId, marketId: opp.marketId },
+        "onOpportunity skipped — already in-flight for this token",
+      );
+      return;
+    }
+    this.inFlightTokenIds.add(opp.tokenId);
+
     const config = getConfig();
 
     try {
@@ -805,6 +819,8 @@ export class MarketOrchestrator extends EventEmitter {
         "SYSTEM",
         `Failed to execute simulated trade for market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
+    } finally {
+      this.inFlightTokenIds.delete(opp.tokenId);
     }
   }
 
