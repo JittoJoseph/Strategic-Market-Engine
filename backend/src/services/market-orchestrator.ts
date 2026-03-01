@@ -104,6 +104,8 @@ export class MarketOrchestrator extends EventEmitter {
   private openPositions: Map<string, OpenPosition> = new Map();
   /** tokenIds currently being processed by onOpportunity — blocks concurrent duplicate executions */
   private inFlightTokenIds: Set<string> = new Set();
+  /** marketIds that still need btcPriceAtWindowStart resolved — used to skip the fill loop when nothing is pending */
+  private pendingBtcFills: Set<string> = new Set();
   private resolutionTimers: Map<string, ReturnType<typeof setInterval>> =
     new Map();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -365,18 +367,27 @@ export class MarketOrchestrator extends EventEmitter {
    *     for the next tick — we’ll fill as soon as the first price arrives.
    */
   private tryFillBtcWindowStart(): void {
+    // Fast-path: nothing is waiting — skip the entire loop.
+    if (this.pendingBtcFills.size === 0) return;
+
     const nowMs = Date.now();
     const windowDurationMs =
       WINDOW_CONFIGS[getConfig().strategy.marketWindow]?.durationMs ??
       5 * 60_000;
 
-    for (const state of this.activeMarkets.values()) {
-      if (state.btcPriceAtWindowStart !== null) continue;
+    for (const marketId of this.pendingBtcFills) {
+      const state = this.activeMarkets.get(marketId);
+      if (!state || state.btcPriceAtWindowStart !== null) {
+        // Market removed or already filled — clean up the set.
+        this.pendingBtcFills.delete(marketId);
+        continue;
+      }
 
       const windowStartMs = state.endDate.getTime() - windowDurationMs;
-      if (nowMs < windowStartMs) continue; // window not open yet
+      if (nowMs < windowStartMs) continue; // window not open yet — wait
 
       let resolved: number | null = null;
+      let source: "historical" | "current" = "historical";
 
       // Only attempt a historical lookup if our buffer actually predates the
       // window start.  If the oldest history entry is newer than windowStartMs
@@ -393,19 +404,25 @@ export class MarketOrchestrator extends EventEmitter {
         const current = this.btcWatcher.getCurrentPrice();
         if (current !== null) {
           resolved = current.price;
-          logger.info(
-            { marketId: state.marketId, windowStartMs, btcPrice: resolved },
-            "Using current BTC price for restarted market (no historical data available)",
-          );
+          source = "current";
         }
       }
 
       if (resolved === null) continue; // BTC not connected yet — wait silently
 
       state.btcPriceAtWindowStart = resolved;
+      this.pendingBtcFills.delete(marketId);
+
       logger.info(
-        { marketId: state.marketId, btcPrice: resolved },
-        "btcPriceAtWindowStart filled",
+        {
+          marketId: state.marketId,
+          btcPrice: resolved,
+          source,
+          ...(source === "current" ? { windowStartMs } : {}),
+        },
+        source === "current"
+          ? "btcPriceAtWindowStart filled (current price — no history covering window start)"
+          : "btcPriceAtWindowStart filled (historical)",
       );
 
       // For relative Up/Down markets the window-start price is the target.
@@ -475,6 +492,10 @@ export class MarketOrchestrator extends EventEmitter {
     };
 
     this.activeMarkets.set(market.id, state);
+    // Only queue for fill if the window-start price wasn't resolved inline above.
+    if (state.btcPriceAtWindowStart === null) {
+      this.pendingBtcFills.add(market.id);
+    }
     this.tryFillBtcWindowStart();
 
     // Build conditionId → marketId lookup for WS resolution events.
@@ -547,8 +568,6 @@ export class MarketOrchestrator extends EventEmitter {
         break;
       }
     }
-
-    this.tryFillBtcWindowStart();
 
     const config = getConfig();
     const momentumSignal = config.strategy.momentumEnabled
@@ -1340,6 +1359,7 @@ export class MarketOrchestrator extends EventEmitter {
       };
 
       this.activeMarkets.set(row.id, state);
+      this.pendingBtcFills.add(row.id);
 
       // Build conditionId → marketId lookup for WS resolution events
       if (row.conditionId) {
