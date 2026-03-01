@@ -292,7 +292,12 @@ export function TradeDetailPopup({
           )}
 
           {/* ── TIMESTAMPS ── */}
-          <Section title="TIMESTAMPS">
+          <div className="border-b border-border/15 last:border-b-0 pb-3">
+            <div className="px-4 pt-3 pb-1">
+              <span className="text-[10px] font-mono font-medium tracking-[0.25em] text-muted-foreground/40 uppercase">
+                TIMESTAMPS
+              </span>
+            </div>
             <Row2>
               <Cell label="OPENED" value={formatTs(trade.entryTs)} />
               <Cell
@@ -312,7 +317,7 @@ export function TradeDetailPopup({
                 />
               )}
             </Row2>
-          </Section>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
