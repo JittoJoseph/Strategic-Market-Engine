@@ -102,8 +102,16 @@ describe("PortfolioManager", () => {
     expect(budget).toBe(15);
   });
 
-  it("returns 0 when budget is below $1 minimum", async () => {
-    // Reduce cash to $0.50
+  it("clamps budget up to $1 when portfolioValue/slots is below $1", async () => {
+    // cash=$4.86, 5 slots → raw slice = $0.972 → clamped to $1, cash ≥ $1 → returns $1
+    await pm.deductCash(95.14);
+    expect(pm.getCashBalance()).toBeCloseTo(4.86, 2);
+    const budget = pm.computePositionBudget(0);
+    expect(budget).toBe(1);
+  });
+
+  it("returns 0 when cash is below $1", async () => {
+    // cash=$0.50 — can't fund even the $1 minimum
     await pm.deductCash(99.5);
     const budget = pm.computePositionBudget(0);
     expect(budget).toBe(0);
@@ -111,7 +119,7 @@ describe("PortfolioManager", () => {
 
   it("returns 0 when cash < $1 even if portfolio value is high", async () => {
     await pm.deductCash(99.5);
-    // Portfolio = 0.5 cash + 100 positions = 100.5, budget = 20.1, capped at cash (0.5) → below $1
+    // Portfolio = 0.5 cash + 100 positions = 100.5, but cash < $1 → blocked
     const budget = pm.computePositionBudget(100);
     expect(budget).toBe(0);
   });

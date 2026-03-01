@@ -69,36 +69,36 @@ export class PortfolioManager {
   /**
    * Compute the budget for the next position.
    *
-   * @param openPositionsValue  Sum of (shares × currentBidPrice) for all OPEN trades
-   * @returns Budget in USD, or 0 if insufficient funds
+   * Sizing = portfolioValue / slots, floored at the $1 minimum.
+   *
+   * Rationale: if portfolioValue is $4.86 and slots=5, the raw slice is $0.97
+   * which is below $1 — but we still *want* to trade, just at the $1 floor.
+   * This way the system can still open up to 4 positions (spending $1 each)
+   * before cash drops below the $1 minimum and new entries are blocked.
+   *
+   * @param openPositionsValue  Sum of actualCost for all OPEN trades
+   * @returns Budget in USD, or 0 if cash is below the $1 minimum
    */
   computePositionBudget(openPositionsValue: number): number {
     const config = getConfig();
     const portfolioValue = this.cashBalance.plus(openPositionsValue);
-    const budget = portfolioValue.div(config.portfolio.slots);
+    const rawBudget = portfolioValue.div(config.portfolio.slots);
 
-    // Minimum $1 position
-    if (budget.lt(1)) {
-      logger.warn(
-        {
-          portfolioValue: portfolioValue.toString(),
-          budget: budget.toString(),
-        },
-        "Position budget below $1 minimum — skipping",
-      );
-      return 0;
-    }
+    // Floor at $1: if the equal-share slice is below $1, still use $1 so that
+    // we keep entering trades until we genuinely can't afford one.
+    const budget = Decimal.max(rawBudget, new Decimal(1));
 
-    // Don't spend more than available cash
-    const capped = Decimal.min(budget, this.cashBalance);
-    if (capped.lt(1)) {
+    // If we don't even have $1 in cash, we truly can't open a new position.
+    if (this.cashBalance.lt(1)) {
       logger.warn(
         { cash: this.cashBalance.toString(), budget: budget.toString() },
-        "Insufficient cash for minimum $1 position",
+        "Insufficient cash for minimum $1 position — skipping",
       );
       return 0;
     }
 
+    // Don't spend more than available cash.
+    const capped = Decimal.min(budget, this.cashBalance);
     return capped.toDP(8).toNumber();
   }
 
