@@ -243,7 +243,8 @@ export class ApiServer {
     this.app.get("/api/trades", async (req: Request, res: Response) => {
       try {
         const db = getDb();
-        const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+        const limit = Math.min(parseInt(req.query.limit as string) || 25, 200);
+        const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
         const status = req.query.status as string | undefined;
 
         const conditions = [];
@@ -251,18 +252,31 @@ export class ApiServer {
           conditions.push(eq(schema.simulatedTrades.status, status));
         }
 
-        const query = db
-          .select()
+        const baseQuery = db
+          .select({
+            trade: schema.simulatedTrades,
+            marketEndDate: schema.markets.endDate,
+          })
           .from(schema.simulatedTrades)
+          .leftJoin(
+            schema.markets,
+            eq(schema.simulatedTrades.marketId, schema.markets.id),
+          )
           .orderBy(desc(schema.simulatedTrades.entryTs))
-          .limit(limit);
+          .limit(limit)
+          .offset(offset);
 
-        const trades =
+        const rows =
           conditions.length > 0
-            ? await query.where(and(...conditions))
-            : await query;
+            ? await baseQuery.where(and(...conditions))
+            : await baseQuery;
 
-        res.json(trades);
+        res.json(
+          rows.map((r) => ({
+            ...r.trade,
+            marketEndDate: r.marketEndDate ?? null,
+          })),
+        );
       } catch (error) {
         logger.error({ error }, "Trades error");
         res.status(500).json({ error: "Failed to get trades" });

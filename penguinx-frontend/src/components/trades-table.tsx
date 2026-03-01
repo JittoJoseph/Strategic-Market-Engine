@@ -8,9 +8,13 @@ interface TradesTableProps {
   loading: boolean;
   /** Real-time bid/ask/mid prices keyed by tokenId, refreshed every ~2s from WS */
   livePrices?: Record<string, LiveMarketPrice>;
-  /** Market end dates keyed by marketId — used for the WINDOW column end time */
+  /** Market end dates keyed by marketId — fallback when trade.marketEndDate is absent */
   marketEndDates?: Record<string, string>;
   onTradeClick?: (trade: SimulatedTrade) => void;
+  /** Called when user clicks Show More */
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
 }
 
 export function TradesTable({
@@ -19,6 +23,9 @@ export function TradesTable({
   livePrices = {},
   marketEndDates = {},
   onTradeClick,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
 }: TradesTableProps) {
   if (loading) {
     return (
@@ -305,6 +312,26 @@ export function TradesTable({
           })}
         </tbody>
       </table>
+
+      {/* Show More */}
+      {(hasMore || loadingMore) && (
+        <div className="flex justify-center pt-3 pb-1">
+          <button
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded text-[11px] font-mono text-muted-foreground border border-border/30 hover:border-border/60 hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {loadingMore ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-pulse" />
+                Loading…
+              </>
+            ) : (
+              "Show more"
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -323,13 +350,15 @@ function extractTimeWindow(
   const fmtTime = (d: Date) =>
     d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+  // Prefer trade.marketEndDate (from backend join), then fall back to prop
+  const endDateStr = trade.marketEndDate ?? marketEndDate;
+
   // Prefer showing the market window END time (closes at)
-  if (marketEndDate) {
-    const endDate = new Date(marketEndDate);
-    const refDate = endDate; // use end date as the day reference
+  if (endDateStr) {
+    const endDate = new Date(endDateStr);
     return {
       time: `${fmtTime(endDate)}${label ? ` · ${label}` : ""}`,
-      date: refDate.toLocaleDateString("en-US", {
+      date: endDate.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
       }),

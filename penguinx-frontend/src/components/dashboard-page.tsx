@@ -48,7 +48,13 @@ export function DashboardPage() {
   } | null>(null);
 
   // Data hooks — trades are WS-driven; no polling
-  const { trades, loading: tradesLoading } = useTrades(undefined, 100);
+  const {
+    trades,
+    loading: tradesLoading,
+    loadMore,
+    hasMore,
+    loadingMore,
+  } = useTrades();
   const { stats, loading: statsLoading } = useSystemStats();
   const {
     markets,
@@ -235,6 +241,9 @@ export function DashboardPage() {
                   livePrices={livePricesMap}
                   marketEndDates={marketEndDates}
                   onTradeClick={setSelectedTrade}
+                  onLoadMore={loadMore}
+                  hasMore={hasMore}
+                  loadingMore={loadingMore}
                 />
               </TabsContent>
 
@@ -440,7 +449,7 @@ function TopDashboardSection({
   const { performance } = usePerformanceRealtime(period);
 
   // Get live unrealized PnL from open trades and current market prices
-  const { trades } = useTrades(undefined, 100);
+  const { trades } = useTrades("OPEN");
   const liveMarkets = useLiveMarkets();
   const liveUnrealizedPnL = useUnrealizedPnL(trades, liveMarkets);
 

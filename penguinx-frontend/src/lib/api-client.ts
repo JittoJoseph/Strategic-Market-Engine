@@ -91,10 +91,12 @@ export class ApiClient {
   async getTrades(params?: {
     status?: string;
     limit?: number;
+    offset?: number;
   }): Promise<SimulatedTrade[]> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.set("status", params.status);
     if (params?.limit) searchParams.set("limit", String(params.limit));
+    if (params?.offset) searchParams.set("offset", String(params.offset));
 
     const qs = searchParams.toString();
     return fetchWithRetry(`${this.baseUrl}/api/trades${qs ? `?${qs}` : ""}`);

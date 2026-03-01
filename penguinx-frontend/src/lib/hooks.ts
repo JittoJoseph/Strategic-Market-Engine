@@ -14,30 +14,67 @@ import type {
 } from "./types";
 
 /**
- * WS-driven trades hook.
- * - Initial load via REST
+ * WS-driven trades hook with pagination.
+ * - Initial load via REST (PAGE_SIZE=25)
+ * - loadMore() fetches the next 25 from the DB
  * - tradeOpened → prepend to list
  * - tradeResolved / stopLossTriggered → update in place
  * No periodic polling.
  */
-export function useTrades(status?: string, limit?: number) {
+const PAGE_SIZE = 25;
+
+export function useTrades(status?: string) {
   const [trades, setTrades] = useState<SimulatedTrade[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // Tracks DB-fetched row count (WS-prepended rows don't count toward offset)
+  const dbFetchedRef = useRef(0);
 
   const fetchTrades = useCallback(async () => {
     try {
       setLoading(true);
+      dbFetchedRef.current = 0;
       const api = getApiClient();
-      const response = await api.getTrades({ status, limit });
+      const response = await api.getTrades({
+        status,
+        limit: PAGE_SIZE,
+        offset: 0,
+      });
       setTrades(response);
+      dbFetchedRef.current = response.length;
+      setHasMore(response.length === PAGE_SIZE);
       setError(null);
     } catch (err) {
       setError(err as Error);
     } finally {
       setLoading(false);
     }
-  }, [status, limit]);
+  }, [status]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return;
+    try {
+      setLoadingMore(true);
+      const api = getApiClient();
+      const response = await api.getTrades({
+        status,
+        limit: PAGE_SIZE,
+        offset: dbFetchedRef.current,
+      });
+      dbFetchedRef.current += response.length;
+      setTrades((prev) => {
+        const ids = new Set(prev.map((t) => t.id));
+        return [...prev, ...response.filter((t) => !ids.has(t.id))];
+      });
+      setHasMore(response.length === PAGE_SIZE);
+    } catch {
+      // silent — keep existing trades visible
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [status, loadingMore]);
 
   useEffect(() => {
     fetchTrades();
@@ -70,7 +107,15 @@ export function useTrades(status?: string, limit?: number) {
     };
   }, []);
 
-  return { trades, loading, error, refetch: fetchTrades };
+  return {
+    trades,
+    loading,
+    loadingMore,
+    hasMore,
+    loadMore,
+    error,
+    refetch: fetchTrades,
+  };
 }
 
 /**

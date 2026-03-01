@@ -40,6 +40,8 @@ export interface SimulatedTrade {
   raw: unknown;
   createdAt: string;
   updatedAt: string;
+  /** Market end date (ISO string) joined from markets table — used for WINDOW column display */
+  marketEndDate: string | null;
 }
 
 // ============================================
