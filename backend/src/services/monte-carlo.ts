@@ -1,18 +1,11 @@
-import { createModuleLogger } from "../utils/logger.js";
+﻿import { createModuleLogger } from "../utils/logger.js";
 import { getDb, getPortfolio } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, desc } from "drizzle-orm";
-import Decimal from "decimal.js";
+import { eq } from "drizzle-orm";
 
 const logger = createModuleLogger("monte-carlo");
 
-// ── Types ──────────────────────────────────────────────────
-
-export interface TradeOutcome {
-  pnl: number;
-  pnlPct: number;
-  isWin: boolean;
-}
+//  Types
 
 export interface MonteCarloConfig {
   /** Number of simulated equity curves to generate */
@@ -32,10 +25,8 @@ export interface PercentileEquityCurve {
 }
 
 export interface MonteCarloResult {
-  /** Input parameters used */
   config: MonteCarloConfig;
 
-  /** Historical trade statistics used as basis */
   historical: {
     totalSettled: number;
     wins: number;
@@ -47,17 +38,14 @@ export interface MonteCarloResult {
     avgLossPct: number;
     largestWin: number;
     largestLoss: number;
+    /** totalWinPnl / |totalLossPnl|; 999 when no losses */
     profitFactor: number;
+    /** Average P&L per trade */
     expectancy: number;
-    /** Per-trade P&L distribution */
-    pnlDistribution: number[];
   };
 
-  /** Final balance distribution across all simulations */
   distribution: {
-    /** Histogram buckets: { min, max, count } */
     histogram: { min: number; max: number; count: number }[];
-    /** Key percentiles of the final balance */
     percentiles: {
       p5: number;
       p25: number;
@@ -65,43 +53,82 @@ export interface MonteCarloResult {
       p75: number;
       p95: number;
     };
-    /** Mean final balance */
     mean: number;
-    /** Standard deviation */
     stdDev: number;
-    /** % of simulations that ended in profit */
+    /** % of sims ending above startingCapital */
     profitProbability: number;
-    /** % of simulations that suffered a drawdown > 50% */
+    /** % of sims that hit a >50 % drawdown at any point */
     ruinProbability: number;
   };
 
-  /** Equity curves at key percentiles for charting */
   equityCurves: PercentileEquityCurve[];
 
-  /** Maximum drawdown statistics */
   drawdown: {
     median: number;
     p95: number;
     worst: number;
   };
 
-  /** Starting capital used */
   startingCapital: number;
 }
 
-// ── Core ───────────────────────────────────────────────────
+//  Helpers
+
+/** Value at percentile p (0-100) of a pre-sorted array. */
+function pctile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(
+    Math.floor((p / 100) * sorted.length),
+    sorted.length - 1,
+  );
+  return sorted[idx]!;
+}
+
+/** Build a fixed-width histogram from a sorted array in O(N). */
+function buildHistogram(
+  sorted: number[],
+  buckets = 20,
+): { min: number; max: number; count: number }[] {
+  const lo = sorted[0]!;
+  const hi = sorted[sorted.length - 1]!;
+  const width = hi > lo ? (hi - lo) / buckets : 1;
+  const counts = new Int32Array(buckets);
+
+  for (const v of sorted) {
+    const i = Math.min(Math.floor((v - lo) / width), buckets - 1);
+    counts[i]!++;
+  }
+
+  return Array.from({ length: buckets }, (_, i) => ({
+    min: r2(lo + i * width),
+    max: r2(i === buckets - 1 ? hi + 0.01 : lo + (i + 1) * width),
+    count: counts[i]!,
+  }));
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+
+//  Constants
 
 const DEFAULT_CONFIG: MonteCarloConfig = {
   simulations: 10_000,
   tradesPerSim: 100,
 };
 
+const CURVE_PERCENTILES = [5, 25, 50, 75, 95] as const;
+
+//  Core
+
 /**
- * Run a Monte Carlo analysis on all settled trades.
+ * Run a full Monte Carlo analysis over all settled trades.
  *
- * We use the *realised PnL* (not exitOutcome) to determine if a trade
- * was a win or loss — this correctly handles stop-loss exits that may
- * sell above entry and therefore aren't actually losses.
+ * Realised PnL (not exitOutcome) drives win/loss classification so
+ * stop-loss exits that clear the entry price are still counted as wins.
+ *
+ * All three result arrays (finalBalances, curves, maxDrawdowns) are
+ * held in a single co-sorted array so percentile indices stay
+ * consistent throughout and no secondary sort is needed for curves.
  */
 export async function runMonteCarloAnalysis(
   overrides?: Partial<MonteCarloConfig>,
@@ -109,208 +136,182 @@ export async function runMonteCarloAnalysis(
   const config: MonteCarloConfig = { ...DEFAULT_CONFIG, ...overrides };
   const db = getDb();
 
-  // 1. Load all settled trades
-  const settledTrades = await db
-    .select()
+  //  1. Load settled trades (only the two columns we need)
+  const rows = await db
+    .select({
+      realizedPnl: schema.simulatedTrades.realizedPnl,
+      actualCost: schema.simulatedTrades.actualCost,
+    })
     .from(schema.simulatedTrades)
-    .where(eq(schema.simulatedTrades.status, "SETTLED"))
-    .orderBy(desc(schema.simulatedTrades.exitTs));
+    .where(eq(schema.simulatedTrades.status, "SETTLED"));
 
-  if (settledTrades.length === 0) {
-    throw new Error("No settled trades to analyse — need historical data");
+  if (rows.length === 0) {
+    throw new Error("No settled trades to analyse  need historical data");
   }
 
-  // 2. Extract P&L data using realizedPnl (not exitOutcome)
-  const outcomes: TradeOutcome[] = [];
-  for (const trade of settledTrades) {
-    const pnl = parseFloat(trade.realizedPnl ?? "0");
-    const cost = parseFloat(trade.actualCost);
+  //  2. Compute historical statistics in a single pass
+  const pnlPool: number[] = [];
+
+  let winCount = 0;
+  let lossCount = 0;
+  let totalWin = 0;
+  let totalLoss = 0; // negative sum
+  let sumWinPct = 0;
+  let sumLossPct = 0;
+  let largestWin = 0;
+  let largestLoss = 0; // most-negative value
+
+  for (const row of rows) {
+    const pnl = parseFloat(row.realizedPnl ?? "0");
+    const cost = parseFloat(row.actualCost ?? "0");
     const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
-    outcomes.push({ pnl, pnlPct, isWin: pnl > 0 });
+
+    pnlPool.push(pnl);
+
+    if (pnl > 0) {
+      winCount++;
+      totalWin += pnl;
+      sumWinPct += pnlPct;
+      if (pnl > largestWin) largestWin = pnl;
+    } else {
+      lossCount++;
+      totalLoss += pnl;
+      sumLossPct += pnlPct;
+      if (pnl < largestLoss) largestLoss = pnl;
+    }
   }
 
-  // 3. Historical statistics
-  const wins = outcomes.filter((o) => o.isWin);
-  const losses = outcomes.filter((o) => !o.isWin);
-  const winRate = wins.length / outcomes.length;
-  const avgWinPnl =
-    wins.length > 0 ? wins.reduce((s, o) => s + o.pnl, 0) / wins.length : 0;
-  const avgLossPnl =
-    losses.length > 0
-      ? losses.reduce((s, o) => s + o.pnl, 0) / losses.length
-      : 0;
-  const avgWinPct =
-    wins.length > 0 ? wins.reduce((s, o) => s + o.pnlPct, 0) / wins.length : 0;
-  const avgLossPct =
-    losses.length > 0
-      ? losses.reduce((s, o) => s + o.pnlPct, 0) / losses.length
-      : 0;
-  const largestWin = wins.length > 0 ? Math.max(...wins.map((o) => o.pnl)) : 0;
-  const largestLoss =
-    losses.length > 0 ? Math.min(...losses.map((o) => o.pnl)) : 0;
-  const totalWinPnl = wins.reduce((s, o) => s + o.pnl, 0);
-  const totalLossPnl = Math.abs(losses.reduce((s, o) => s + o.pnl, 0));
+  const n = pnlPool.length;
+  const winRate = winCount / n;
+  const avgWinPnl = winCount > 0 ? totalWin / winCount : 0;
+  const avgLossPnl = lossCount > 0 ? totalLoss / lossCount : 0;
+  const avgWinPct = winCount > 0 ? sumWinPct / winCount : 0;
+  const avgLossPct = lossCount > 0 ? sumLossPct / lossCount : 0;
+  const totalLossAbs = Math.abs(totalLoss);
   const profitFactor =
-    totalLossPnl > 0
-      ? totalWinPnl / totalLossPnl
-      : totalWinPnl > 0
-        ? Infinity
-        : 0;
-  const expectancy = outcomes.reduce((s, o) => s + o.pnl, 0) / outcomes.length;
+    totalLossAbs > 0 ? totalWin / totalLossAbs : totalWin > 0 ? Infinity : 0;
+  const expectancy = pnlPool.reduce((s, v) => s + v, 0) / n;
 
-  // 4. Get starting capital
+  //  3. Starting capital
   const portfolio = await getPortfolio();
   const startingCapital = portfolio
     ? parseFloat(portfolio.initialCapital)
     : 100;
 
-  // 5. Run Monte Carlo simulations
-  //    For each sim we randomly sample (with replacement) from the historical
-  //    P&L distribution and build an equity curve.
-  const pnlPool = outcomes.map((o) => o.pnl);
-  const finalBalances: number[] = [];
-  const maxDrawdowns: number[] = [];
-  // Store all equity curves, then sample percentile ones
-  const allCurves: number[][] = [];
+  //  4. Monte Carlo simulations
+  // Store all three result dimensions together so a single sort keeps
+  // them aligned  avoids the index-drift bug that occurs when
+  // finalBalances is sorted in-place separately from allCurves.
+  type Sim = { finalBalance: number; maxDrawdown: number; curve: Float64Array };
+  const sims: Sim[] = new Array(config.simulations);
 
-  for (let sim = 0; sim < config.simulations; sim++) {
+  for (let s = 0; s < config.simulations; s++) {
     let balance = startingCapital;
     let peak = balance;
     let maxDD = 0;
-    const curve: number[] = [balance];
+    const curve = new Float64Array(config.tradesPerSim + 1);
+    curve[0] = balance;
 
     for (let t = 0; t < config.tradesPerSim; t++) {
-      // Random sample from historical distribution
-      const randomIdx = Math.floor(Math.random() * pnlPool.length);
-      const pnl = pnlPool[randomIdx]!;
-      balance += pnl;
-
-      // Track equity curve
-      curve.push(balance);
-
-      // Track max drawdown
+      balance += pnlPool[Math.floor(Math.random() * n)]!;
+      curve[t + 1] = balance;
       if (balance > peak) peak = balance;
       const dd = peak > 0 ? ((peak - balance) / peak) * 100 : 0;
       if (dd > maxDD) maxDD = dd;
     }
 
-    finalBalances.push(balance);
-    maxDrawdowns.push(maxDD);
-    allCurves.push(curve);
+    sims[s] = { finalBalance: balance, maxDrawdown: maxDD, curve };
   }
 
-  // 6. Compute distribution statistics
-  finalBalances.sort((a, b) => a - b);
-  maxDrawdowns.sort((a, b) => a - b);
+  //  5. Co-sort simulations by final balance
+  sims.sort((a, b) => a.finalBalance - b.finalBalance);
 
-  const percentile = (arr: number[], p: number) => {
-    const idx = Math.floor((p / 100) * (arr.length - 1));
-    return arr[idx]!;
-  };
+  const sortedFinalBalances = sims.map((s) => s.finalBalance);
 
-  const mean = finalBalances.reduce((s, v) => s + v, 0) / finalBalances.length;
-  const variance =
-    finalBalances.reduce((s, v) => s + (v - mean) ** 2, 0) /
-    finalBalances.length;
-  const stdDev = Math.sqrt(variance);
+  // Drawdown percentiles use their own sort order
+  const sortedMaxDrawdowns = sims
+    .map((s) => s.maxDrawdown)
+    .sort((a, b) => a - b);
 
-  const profitCount = finalBalances.filter((b) => b > startingCapital).length;
-  const profitProbability = (profitCount / finalBalances.length) * 100;
+  //  6. Distribution statistics
+  let sum = 0;
+  for (const b of sortedFinalBalances) sum += b;
+  const mean = sum / config.simulations;
 
-  const ruinCount = maxDrawdowns.filter((dd) => dd > 50).length;
-  const ruinProbability = (ruinCount / maxDrawdowns.length) * 100;
+  let varSum = 0;
+  for (const b of sortedFinalBalances) varSum += (b - mean) ** 2;
+  const stdDev = Math.sqrt(varSum / config.simulations);
 
-  // 7. Build histogram (20 buckets)
-  const bucketCount = 20;
-  const minBal = finalBalances[0]!;
-  const maxBal = finalBalances[finalBalances.length - 1]!;
-  const bucketWidth = (maxBal - minBal) / bucketCount || 1;
-  const histogram: { min: number; max: number; count: number }[] = [];
-  for (let i = 0; i < bucketCount; i++) {
-    const bMin = minBal + i * bucketWidth;
-    const bMax =
-      i === bucketCount - 1 ? maxBal + 0.01 : minBal + (i + 1) * bucketWidth;
-    const count = finalBalances.filter((b) => b >= bMin && b < bMax).length;
-    histogram.push({
-      min: parseFloat(bMin.toFixed(2)),
-      max: parseFloat(bMax.toFixed(2)),
-      count,
-    });
-  }
+  let profitCount = 0;
+  for (const b of sortedFinalBalances) if (b > startingCapital) profitCount++;
 
-  // 8. Extract equity curves at key percentiles
-  const curvePercentiles = [5, 25, 50, 75, 95];
-  // Sort allCurves by final balance
-  const sortedCurveIndices = finalBalances
-    .map((_, i) => i)
-    .sort((a, b) => {
-      const aCurve = allCurves[a]!;
-      const bCurve = allCurves[b]!;
-      return aCurve[aCurve.length - 1]! - bCurve[bCurve.length - 1]!;
-    });
+  let ruinCount = 0;
+  for (const dd of sortedMaxDrawdowns) if (dd > 50) ruinCount++;
 
-  const equityCurves: PercentileEquityCurve[] = curvePercentiles.map((p) => {
-    const idx = Math.floor((p / 100) * (sortedCurveIndices.length - 1));
-    const curveIdx = sortedCurveIndices[idx]!;
-    const curve = allCurves[curveIdx]!;
-    return {
-      percentile: p,
-      curve: curve.map((balance, tradeIndex) => ({
-        tradeIndex,
-        balance: parseFloat(balance.toFixed(2)),
-      })),
-    };
+  //  7. Histogram (O(N) single-pass)
+  const histogram = buildHistogram(sortedFinalBalances);
+
+  //  8. Equity curves at key percentiles
+  // sims[] is sorted by finalBalance so we index directly.
+  const equityCurves: PercentileEquityCurve[] = CURVE_PERCENTILES.map((p) => {
+    const idx = Math.min(
+      Math.floor((p / 100) * config.simulations),
+      config.simulations - 1,
+    );
+    const raw = sims[idx]!.curve;
+    const curve: EquityCurvePoint[] = Array.from(
+      { length: raw.length },
+      (_, i) => ({ tradeIndex: i, balance: r2(raw[i]!) }),
+    );
+    return { percentile: p, curve };
   });
 
   logger.info(
     {
-      settledTrades: outcomes.length,
+      settledTrades: n,
       simulations: config.simulations,
-      winRate: (winRate * 100).toFixed(1),
-      profitProbability: profitProbability.toFixed(1),
-      medianFinal: percentile(finalBalances, 50).toFixed(2),
+      winRate: (winRate * 100).toFixed(1) + "%",
+      median: r2(pctile(sortedFinalBalances, 50)),
+      profitProb: ((profitCount / config.simulations) * 100).toFixed(1) + "%",
     },
-    "Monte Carlo analysis complete",
+    "Monte Carlo complete",
   );
 
   return {
     config,
     historical: {
-      totalSettled: outcomes.length,
-      wins: wins.length,
-      losses: losses.length,
-      winRate: parseFloat((winRate * 100).toFixed(2)),
-      avgWinPnl: parseFloat(avgWinPnl.toFixed(6)),
-      avgLossPnl: parseFloat(avgLossPnl.toFixed(6)),
-      avgWinPct: parseFloat(avgWinPct.toFixed(2)),
-      avgLossPct: parseFloat(avgLossPct.toFixed(2)),
-      largestWin: parseFloat(largestWin.toFixed(6)),
-      largestLoss: parseFloat(largestLoss.toFixed(6)),
-      profitFactor: parseFloat(
-        profitFactor === Infinity ? "999" : profitFactor.toFixed(2),
-      ),
-      expectancy: parseFloat(expectancy.toFixed(6)),
-      pnlDistribution: outcomes.map((o) => parseFloat(o.pnl.toFixed(6))),
+      totalSettled: n,
+      wins: winCount,
+      losses: lossCount,
+      winRate: r2(winRate * 100),
+      avgWinPnl: r6(avgWinPnl),
+      avgLossPnl: r6(avgLossPnl),
+      avgWinPct: r2(avgWinPct),
+      avgLossPct: r2(avgLossPct),
+      largestWin: r6(largestWin),
+      largestLoss: r6(largestLoss),
+      profitFactor: profitFactor === Infinity ? 999 : r2(profitFactor),
+      expectancy: r6(expectancy),
     },
     distribution: {
       histogram,
       percentiles: {
-        p5: parseFloat(percentile(finalBalances, 5).toFixed(2)),
-        p25: parseFloat(percentile(finalBalances, 25).toFixed(2)),
-        p50: parseFloat(percentile(finalBalances, 50).toFixed(2)),
-        p75: parseFloat(percentile(finalBalances, 75).toFixed(2)),
-        p95: parseFloat(percentile(finalBalances, 95).toFixed(2)),
+        p5: r2(pctile(sortedFinalBalances, 5)),
+        p25: r2(pctile(sortedFinalBalances, 25)),
+        p50: r2(pctile(sortedFinalBalances, 50)),
+        p75: r2(pctile(sortedFinalBalances, 75)),
+        p95: r2(pctile(sortedFinalBalances, 95)),
       },
-      mean: parseFloat(mean.toFixed(2)),
-      stdDev: parseFloat(stdDev.toFixed(2)),
-      profitProbability: parseFloat(profitProbability.toFixed(2)),
-      ruinProbability: parseFloat(ruinProbability.toFixed(2)),
+      mean: r2(mean),
+      stdDev: r2(stdDev),
+      profitProbability: r2((profitCount / config.simulations) * 100),
+      ruinProbability: r2((ruinCount / sortedMaxDrawdowns.length) * 100),
     },
     equityCurves,
     drawdown: {
-      median: parseFloat(percentile(maxDrawdowns, 50).toFixed(2)),
-      p95: parseFloat(percentile(maxDrawdowns, 95).toFixed(2)),
-      worst: parseFloat(maxDrawdowns[maxDrawdowns.length - 1]!.toFixed(2)),
+      median: r2(pctile(sortedMaxDrawdowns, 50)),
+      p95: r2(pctile(sortedMaxDrawdowns, 95)),
+      worst: r2(sortedMaxDrawdowns[sortedMaxDrawdowns.length - 1]!),
     },
     startingCapital,
   };

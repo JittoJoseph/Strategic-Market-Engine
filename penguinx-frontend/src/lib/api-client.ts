@@ -139,14 +139,21 @@ export class ApiClient {
   async getAnalysis(params?: {
     simulations?: number;
     tradesPerSim?: number;
-  }): Promise<MonteCarloResult> {
+  }): Promise<MonteCarloResult | null> {
     const searchParams = new URLSearchParams();
     if (params?.simulations)
       searchParams.set("simulations", String(params.simulations));
     if (params?.tradesPerSim)
       searchParams.set("tradesPerSim", String(params.tradesPerSim));
     const qs = searchParams.toString();
-    return fetchWithRetry(`${this.baseUrl}/api/analysis${qs ? `?${qs}` : ""}`);
+    // Do NOT retry on 400 — backend returns 400 when there are no settled trades
+    const response = await fetch(
+      `${this.baseUrl}/api/analysis${qs ? `?${qs}` : ""}`,
+    );
+    if (response.status === 400) return null;
+    if (!response.ok)
+      throw new Error(`Analysis request failed: ${response.status}`);
+    return response.json();
   }
 }
 

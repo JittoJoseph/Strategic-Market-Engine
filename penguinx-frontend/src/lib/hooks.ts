@@ -315,16 +315,28 @@ export function usePerformanceRealtime(
         const oldTotalPnl = parseFloat(prev.totalPnl || "0");
         const newTotalPnl = oldTotalPnl + pnl;
 
-        const oldUnrealizedPnl = parseFloat(prev.unrealizedPnl || "0");
-        // Assume the pnl was previously unrealized, now it's realized
-        const newUnrealizedPnl = Math.max(0, oldUnrealizedPnl - Math.abs(pnl));
+        // When a trade settles, cash is returned (actualCost) + pnl added back
+        const actualCost = parseFloat(trade.actualCost || "0");
+        const oldCashBalance = parseFloat(prev.cashBalance || "0");
+        const newCashBalance = oldCashBalance + actualCost + pnl;
 
-        const oldRealizedPnl = oldTotalPnl - oldUnrealizedPnl;
-        const newRealizedPnl = oldRealizedPnl + pnl;
+        // Reduce open positions value by the cost that was deployed
+        const oldOpenPositionsValue = parseFloat(
+          prev.openPositionsValue || "0",
+        );
+        const newOpenPositionsValue = Math.max(
+          0,
+          oldOpenPositionsValue - actualCost,
+        );
 
-        // Calculate ROI
-        const totalDeployed = parseFloat(prev.totalDeployed || "1");
-        const newRoi = (newTotalPnl / totalDeployed) * 100;
+        // ROI = (portfolioValue - initialCapital) / initialCapital × 100
+        // (same formula as the backend performance-calculator)
+        const initialCapital = parseFloat(prev.initialCapital || "0");
+        const newPortfolioValue = newCashBalance + newOpenPositionsValue;
+        const newRoi =
+          initialCapital > 0
+            ? ((newPortfolioValue - initialCapital) / initialCapital) * 100
+            : 0;
 
         // Calculate win rate
         const newWinRate =
@@ -338,20 +350,6 @@ export function usePerformanceRealtime(
         const newBestTrade = Math.max(oldBestTrade, Math.max(0, pnl));
         const newWorstTrade = Math.min(oldWorstTrade, Math.min(0, pnl));
 
-        // Calculate average win/loss (rough estimate based on cumulative)
-        const newAvgWin =
-          newWins > 0 ? (newRealizedPnl > 0 ? newRealizedPnl / newWins : 0) : 0;
-        const newAvgLoss =
-          newLosses > 0
-            ? newRealizedPnl < 0
-              ? Math.abs(newRealizedPnl) / newLosses
-              : 0
-            : 0;
-
-        // Calculate profit factor
-        const newProfitFactor =
-          newAvgLoss !== 0 ? Math.abs(newAvgWin / newAvgLoss) : 0;
-
         // Update open positions
         const newOpenPositions = Math.max(0, prev.openPositions - 1);
 
@@ -362,11 +360,10 @@ export function usePerformanceRealtime(
           wins: newWins,
           losses: newLosses,
           winRate: newWinRate,
-          unrealizedPnl: newUnrealizedPnl.toFixed(4),
+          cashBalance: newCashBalance.toFixed(2),
+          openPositionsValue: newOpenPositionsValue.toFixed(2),
           largestWin: newBestTrade.toFixed(4),
           largestLoss: newWorstTrade.toFixed(4),
-          avgWin: newAvgWin.toFixed(4),
-          avgLoss: newAvgLoss.toFixed(4),
           openPositions: newOpenPositions,
         };
       });

@@ -246,7 +246,6 @@ export interface MonteCarloResult {
     largestLoss: number;
     profitFactor: number;
     expectancy: number;
-    pnlDistribution: number[];
   };
   distribution: {
     histogram: MonteCarloHistogram[];

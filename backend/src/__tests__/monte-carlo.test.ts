@@ -30,14 +30,12 @@ let mockTrades: Array<{
 let mockPortfolio: { initialCapital: string; cashBalance: string } | null =
   null;
 
-// Mock DB
+// Mock DB — select(...).from(...).where(...) is now the full chain (no .orderBy)
 vi.mock("../db/client.js", () => ({
   getDb: () => ({
     select: () => ({
       from: () => ({
-        where: () => ({
-          orderBy: () => Promise.resolve(mockTrades),
-        }),
+        where: () => Promise.resolve(mockTrades),
       }),
     }),
   }),
@@ -48,14 +46,14 @@ vi.mock("../db/client.js", () => ({
 vi.mock("../db/schema.js", () => ({
   simulatedTrades: {
     status: "status",
-    exitTs: "exit_ts",
+    realizedPnl: "realized_pnl",
+    actualCost: "actual_cost",
   },
 }));
 
 // Mock drizzle-orm operators
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((_col: any, val: any) => ({ op: "eq", val })),
-  desc: vi.fn((_col: any) => "desc"),
 }));
 
 describe("Monte Carlo Analysis", () => {
