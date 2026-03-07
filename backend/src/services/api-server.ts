@@ -174,7 +174,6 @@ export class ApiServer {
             startingCapital: config.portfolio.startingCapital,
             maxPositions: config.strategy.maxSimultaneousPositions,
             minBtcDistanceUsd: config.strategy.minBtcDistanceUsd,
-            minOracleLeadUsd: config.strategy.minOracleLeadUsd,
             stopLossEnabled: config.strategy.stopLossEnabled,
             stopLossPriceTrigger: config.strategy.stopLossPriceTrigger,
             momentumEnabled: config.strategy.momentumEnabled,

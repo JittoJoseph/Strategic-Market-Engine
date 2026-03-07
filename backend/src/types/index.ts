@@ -130,8 +130,6 @@ export const ConfigSchema = z.object({
     momentumEnabled: z.boolean(),
     momentumLookbackMs: z.number().min(10_000).max(600_000),
     momentumMinChangeUsd: z.number().min(0).max(1000),
-    // Oracle confirmation: BTC must have moved this many USD past window-start in the trade direction
-    minOracleLeadUsd: z.number().min(0).max(100_000),
   }),
   admin: z.object({
     password: z.string().min(1),

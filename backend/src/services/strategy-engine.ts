@@ -17,9 +17,7 @@ export interface MarketOpportunity {
   btcPrice: number;
   btcTargetPrice: number;
   btcDistanceUsd: number;
-  /** Signed lead: positive = BTC above window-start, negative = below.
-   *  For Up bets we need oracleLeadUsd > 0, for Down bets oracleLeadUsd < 0. */
-  oracleLeadUsd: number;
+
   secondsToEnd: number;
   trigger: string;
   /** Momentum signal at time of entry (for logging/display) */
@@ -170,24 +168,6 @@ export class StrategyEngine extends EventEmitter {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    // ── Oracle Confirmation ───────────────────────────────────────────────────
-    // Only enter if BTC has already crossed the window-start threshold in the
-    // trade direction by at least minOracleLeadUsd. This eliminates trades where
-    // BTC is drifting near the boundary and may flip before market close.
-    // Positive oracleLeadUsd = BTC above windowStart (favours Up).
-    // Negative oracleLeadUsd = BTC below windowStart (favours Down).
-    const oracleLeadUsd = btcPriceData.price - market.targetPrice;
-    if (
-      this.checkOracleFilter(
-        market.outcomeLabel,
-        oracleLeadUsd,
-        config.strategy.minOracleLeadUsd,
-      )
-    ) {
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
       return;
 
@@ -201,7 +181,6 @@ export class StrategyEngine extends EventEmitter {
       btcPrice: btcPriceData.price,
       btcTargetPrice: market.targetPrice,
       btcDistanceUsd,
-      oracleLeadUsd,
       secondsToEnd,
       trigger: "end_of_window_micro_profit",
       momentum: momentumSignal,
@@ -218,7 +197,6 @@ export class StrategyEngine extends EventEmitter {
         bestAsk: bestAsk.toFixed(4),
         btcPrice: btcPriceData.price.toFixed(2),
         btcDistance: btcDistanceUsd.toFixed(2),
-        oracleLead: oracleLeadUsd.toFixed(2),
         secondsToEnd: secondsToEnd.toFixed(1),
         momentum: momentumSignal
           ? `${momentumSignal.direction} ${momentumSignal.changeUsd >= 0 ? "+" : ""}$${momentumSignal.changeUsd.toFixed(2)}`
@@ -228,47 +206,6 @@ export class StrategyEngine extends EventEmitter {
     );
 
     this.emit("opportunityDetected", opportunity);
-  }
-
-  /**
-   * Oracle confirmation filter.
-   *
-   * Checks that the live BTC price has crossed the window-start threshold in
-   * the intended trade direction by at least `minLeadUsd`.
-   *
-   * For Up bets: oracleLeadUsd must be >= +minLeadUsd (BTC above start)
-   * For Down bets: oracleLeadUsd must be <= -minLeadUsd (BTC below start)
-   *
-   * Returns true if the trade should be SKIPPED.
-   */
-  private checkOracleFilter(
-    outcomeLabel: string,
-    oracleLeadUsd: number,
-    minLeadUsd: number,
-  ): boolean {
-    if (outcomeLabel === "Up" && oracleLeadUsd < minLeadUsd) {
-      logger.info(
-        {
-          outcomeLabel,
-          oracleLeadUsd: oracleLeadUsd.toFixed(2),
-          minLeadUsd,
-        },
-        "Skipping UP: BTC has not cleared window-start by enough (oracle check)",
-      );
-      return true;
-    }
-    if (outcomeLabel === "Down" && oracleLeadUsd > -minLeadUsd) {
-      logger.info(
-        {
-          outcomeLabel,
-          oracleLeadUsd: oracleLeadUsd.toFixed(2),
-          minLeadUsd,
-        },
-        "Skipping DOWN: BTC has not dropped below window-start by enough (oracle check)",
-      );
-      return true;
-    }
-    return false; // Oracle confirmed — BTC is on the correct side
   }
 
   /**

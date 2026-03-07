@@ -35,8 +35,7 @@ vi.mock("../utils/config.js", () => ({
       stopLossPriceTrigger: 0.85,
       momentumEnabled: true,
       momentumLookbackMs: 90_000,
-      momentumMinChangeUsd: 30,
-      minOracleLeadUsd: 50,
+      momentumMinChangeUsd: 20,
     },
     portfolio: { startingCapital: 100 },
     logging: { level: "silent" },
@@ -369,14 +368,11 @@ describe("StrategyEngine", () => {
     expect(opp.momentum.hasData).toBe(true);
   });
 
-  // ── Oracle confirmation filter tests ─────────────────────────────────────
-  // btcPrice = 97500, minOracleLeadUsd = 50
-  // Up bets pass when BTC >= windowStart + 50 → target must be <= 97450
-  // Down bets pass when BTC <= windowStart - 50 → target must be >= 97550
+  // ── BTC distance filter (replaces old oracle confirmation tests) ──────────
 
-  it("ALLOWS Up entry when BTC is 100 USD above window-start (oracle pass)", () => {
+  it("ALLOWS entry when BTC distance exceeds minimum", () => {
     const endDate = new Date(Date.now() + 30_000);
-    // target=97400, btcPrice=97500 → oracleLeadUsd=+100 >= +50 ✓
+    // target=97400, btcPrice=97500 → distance=100 >= minBtcDistanceUsd(7) ✓
     engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
 
     const handler = vi.fn();
@@ -385,13 +381,13 @@ describe("StrategyEngine", () => {
     engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).toHaveBeenCalledOnce();
-    expect(handler.mock.calls[0][0].oracleLeadUsd).toBeCloseTo(100, 0);
+    expect(handler.mock.calls[0][0].btcDistanceUsd).toBeCloseTo(100, 0);
   });
 
-  it("BLOCKS Up entry when BTC is only 20 USD above window-start (oracle fail)", () => {
+  it("BLOCKS entry when BTC distance is below minimum", () => {
     const endDate = new Date(Date.now() + 30_000);
-    // target=97480, btcPrice=97500 → oracleLeadUsd=+20 < +50 ✗
-    engine.registerMarket("market-1", "token-up", "Up", endDate, 97480);
+    // target=97498, btcPrice=97500 → distance=2 < minBtcDistanceUsd(7) ✗
+    engine.registerMarket("market-1", "token-up", "Up", endDate, 97498);
 
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
@@ -399,85 +395,5 @@ describe("StrategyEngine", () => {
     engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
 
     expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("BLOCKS Up entry when BTC is BELOW window-start (oracle fail — wrong side)", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    // target=97600, btcPrice=97500 → oracleLeadUsd=-100 < +50 ✗
-    engine.registerMarket("market-1", "token-up", "Up", endDate, 97600);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
-
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("ALLOWS Down entry when BTC is 100 USD below window-start (oracle pass)", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    // target=97600, btcPrice=97500 → oracleLeadUsd=-100 <= -50 ✓
-    engine.registerMarket("market-1", "token-down", "Down", endDate, 97600);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-down", 0.96, 0.98, btcPrice, downMomentum);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler.mock.calls[0][0].oracleLeadUsd).toBeCloseTo(-100, 0);
-  });
-
-  it("BLOCKS Down entry when BTC is only 20 USD below window-start (oracle fail)", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    // target=97520, btcPrice=97500 → oracleLeadUsd=-20 > -50 ✗
-    engine.registerMarket("market-1", "token-down", "Down", endDate, 97520);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-down", 0.96, 0.98, btcPrice, downMomentum);
-
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("BLOCKS Down entry when BTC is ABOVE window-start (oracle fail — wrong side)", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    // target=97400, btcPrice=97500 → oracleLeadUsd=+100 > -50 ✗
-    engine.registerMarket("market-1", "token-down", "Down", endDate, 97400);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-down", 0.96, 0.98, btcPrice, downMomentum);
-
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("oracle check passes exacty at the boundary (lead === minOracleLeadUsd)", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    // target=97450, btcPrice=97500 → oracleLeadUsd=+50 === +50 ✓ (passes >=)
-    engine.registerMarket("market-1", "token-up", "Up", endDate, 97450);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
-
-    expect(handler).toHaveBeenCalledOnce();
-  });
-
-  it("opportunity carries oracleLeadUsd in emitted data", () => {
-    const endDate = new Date(Date.now() + 30_000);
-    engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
-
-    const handler = vi.fn();
-    engine.on("opportunityDetected", handler);
-
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, upMomentum);
-
-    const opp = handler.mock.calls[0][0];
-    expect(typeof opp.oracleLeadUsd).toBe("number");
-    expect(opp.oracleLeadUsd).toBeCloseTo(100, 0); // 97500 - 97400
   });
 });

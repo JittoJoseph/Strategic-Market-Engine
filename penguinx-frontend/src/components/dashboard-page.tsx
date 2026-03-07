@@ -367,12 +367,6 @@ export function DashboardPage() {
                     label="BTC Min Dist"
                     value={`$${stats.config.minBtcDistanceUsd}`}
                   />
-                  {(stats.config as any).minOracleLeadUsd !== undefined && (
-                    <StatRow
-                      label="Oracle Lead"
-                      value={`$${(stats.config as any).minOracleLeadUsd}`}
-                    />
-                  )}
                   <StatRow
                     label="Stop Loss"
                     value={
