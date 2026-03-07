@@ -361,7 +361,7 @@ export function DashboardPage() {
                   />
                   <StatRow
                     label="Max Positions"
-                    value={stats.config.maxPositions.toString()}
+                    value={stats.config.maxPositions?.toString() ?? "—"}
                   />
                   <StatRow
                     label="BTC Min Dist"
