@@ -145,7 +145,7 @@ export async function createSimulatedTrade(data: {
       marketCategory: data.marketCategory || null,
       windowType: data.windowType || null,
       side: "BUY",
-      orderType: "LIMIT_GTC",
+      orderType: "FAK",
       outcomeLabel: data.outcomeLabel || null,
       entryTs: data.entryTs,
       entryPrice: data.entryPrice,

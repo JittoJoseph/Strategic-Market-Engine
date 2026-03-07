@@ -360,12 +360,8 @@ export function DashboardPage() {
                     value={`$${stats.config.startingCapital}`}
                   />
                   <StatRow
-                    label="Portfolio Slots"
-                    value={stats.config.portfolioSlots.toString()}
-                  />
-                  <StatRow
                     label="Max Positions"
-                    value={stats.config.maxSimultaneousPositions.toString()}
+                    value={stats.config.maxPositions.toString()}
                   />
                   <StatRow
                     label="BTC Min Dist"

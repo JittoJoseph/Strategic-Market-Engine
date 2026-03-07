@@ -24,6 +24,7 @@ import {
   calculateWinProfit,
   calculateLossAmount,
   calculateEarlyExitPnl,
+  calculateFeePerShare,
   type ExecutionResult,
   type SellExecutionResult,
 } from "../services/execution-simulator.js";
@@ -144,13 +145,53 @@ describe("simulateLimitBuy", () => {
     expect(result.fees).toBeLessThan(0.01);
   });
 
-  it("correctly marks partial fills", () => {
+  it("correctly marks partial fills when budget remains", () => {
     const orderbook = makeOrderbook([{ price: "0.95", size: "0.5" }], []);
 
     const result = simulateLimitBuy(orderbook, 10, 0.95);
 
     expect(result.isPartialFill).toBe(true);
     expect(result.totalShares).toBeCloseTo(0.5, 1);
+  });
+
+  it("belowMinimumOrderSize is true when filled < min_order_size", () => {
+    // min_order_size defaults to 5 when not set
+    const orderbook = makeOrderbook([{ price: "0.95", size: "3" }], []);
+
+    const result = simulateLimitBuy(orderbook, 10, 0.95);
+
+    expect(result.totalShares).toBe(3);
+    expect(result.belowMinimumOrderSize).toBe(true);
+    expect(result.minOrderSize).toBe(5);
+  });
+
+  it("belowMinimumOrderSize is false when filled >= min_order_size", () => {
+    const orderbook = makeOrderbook([{ price: "0.95", size: "100" }], []);
+
+    const result = simulateLimitBuy(orderbook, 10, 0.95);
+
+    expect(result.totalShares).toBeGreaterThanOrEqual(5);
+    expect(result.belowMinimumOrderSize).toBe(false);
+  });
+
+  it("respects custom min_order_size from orderbook", () => {
+    const orderbook: Orderbook = {
+      market: "0xtest",
+      asset_id: "test-token-id",
+      timestamp: String(Date.now()),
+      hash: "0xhash",
+      bids: [],
+      asks: [{ price: "0.95", size: "8" }],
+      min_order_size: "10",
+      tick_size: "0.01",
+      neg_risk: false,
+    };
+
+    const result = simulateLimitBuy(orderbook, 10, 0.95);
+
+    expect(result.totalShares).toBe(8);
+    expect(result.belowMinimumOrderSize).toBe(true);
+    expect(result.minOrderSize).toBe(10);
   });
 
   it("netCost equals totalCost + fees", () => {
@@ -247,6 +288,24 @@ describe("simulateLimitSell", () => {
 // ============================================
 // PnL Calculation Helpers
 // ============================================
+
+describe("calculateFeePerShare", () => {
+  it("returns near-zero fee at extreme prices", () => {
+    const fee97 = calculateFeePerShare(0.97);
+    expect(fee97).toBeLessThan(0.001);
+    expect(fee97).toBeGreaterThanOrEqual(0);
+  });
+
+  it("returns peak fee near 0.50", () => {
+    const fee50 = calculateFeePerShare(0.5);
+    expect(fee50).toBeGreaterThan(0.01);
+  });
+
+  it("returns 0 at price 0 and 1", () => {
+    expect(calculateFeePerShare(0)).toBe(0);
+    expect(calculateFeePerShare(1)).toBe(0);
+  });
+});
 
 describe("calculateWinProfit", () => {
   it("calculates profit for a winning trade", () => {

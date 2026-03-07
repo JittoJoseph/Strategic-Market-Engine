@@ -22,10 +22,20 @@ vi.mock("../utils/logger.js", () => {
 // Mock config
 vi.mock("../utils/config.js", () => ({
   getConfig: () => ({
-    portfolio: { startingCapital: 100, slots: 5 },
+    portfolio: { startingCapital: 100 },
+    strategy: { maxSimultaneousPositions: 5 },
     logging: { level: "silent" },
     env: "test",
   }),
+}));
+
+// Mock calculateFeePerShare (avoid circular dep issues in tests)
+vi.mock("../services/execution-simulator.js", () => ({
+  calculateFeePerShare: (price: number) => {
+    // Simplified: crypto fee = 0.25 * (p*(1-p))^2
+    const pq = price * (1 - price);
+    return Math.round(0.25 * Math.pow(pq, 2) * 10000) / 10000;
+  },
 }));
 
 // Mock DB — in-memory single portfolio row
@@ -78,17 +88,23 @@ describe("PortfolioManager", () => {
     await expect(pm.reload()).rejects.toThrow("Portfolio row missing");
   });
 
-  // ── Position sizing ──────────────────────────────────────────
+  // ── Position sizing (share-based minimum) ─────────────────────
+
+  // Fee at bestAsk=0.95: pq=0.95*0.05=0.0475, fee=0.25*(0.0475)^2≈0.0006
+  // costPerShare = 0.95 + 0.0006 = 0.9506
+  // minBudget = 0.9506 * 5 = 4.753
 
   it("computes budget = portfolioValue / slots", () => {
-    // Portfolio value = 100 cash + 0 open = 100, slots = 5 → budget = 20
-    const budget = pm.computePositionBudget(0);
+    // Portfolio value = 100 cash + 0 open = 100, slots = 5 → raw = 20
+    // max(20, 4.753) = 20, capped at cash(100) → 20
+    const budget = pm.computePositionBudget(0, 0.95);
     expect(budget).toBe(20);
   });
 
   it("includes open positions value in sizing", () => {
-    // cash=100, open positions worth $50 → portfolio = 150, budget = 30
-    const budget = pm.computePositionBudget(50);
+    // cash=100, open positions worth $50 → portfolio = 150, raw = 30
+    // max(30, 4.753) = 30, capped at cash(100) → 30
+    const budget = pm.computePositionBudget(50, 0.95);
     expect(budget).toBe(30);
   });
 
@@ -97,30 +113,32 @@ describe("PortfolioManager", () => {
     await pm.deductCash(85);
     expect(pm.getCashBalance()).toBe(15);
 
-    // Portfolio = 15 cash + 100 open = 115, budget = 23, but capped at cash (15)
-    const budget = pm.computePositionBudget(100);
+    // Portfolio = 15 cash + 100 open = 115, raw = 23
+    // max(23, 4.753) = 23, capped at cash(15) → 15
+    const budget = pm.computePositionBudget(100, 0.95);
     expect(budget).toBe(15);
   });
 
-  it("clamps budget up to $1 when portfolioValue/slots is below $1", async () => {
-    // cash=$4.86, 5 slots → raw slice = $0.972 → clamped to $1, cash ≥ $1 → returns $1
+  it("uses share-based minimum when raw slice is tiny", async () => {
+    // cash=$4.86, portfolio=4.86, raw=0.972
+    // minBudget=4.753, max(0.972, 4.753)=4.753, cash(4.86)≥4.753 → 4.753
     await pm.deductCash(95.14);
     expect(pm.getCashBalance()).toBeCloseTo(4.86, 2);
-    const budget = pm.computePositionBudget(0);
-    expect(budget).toBe(1);
+    const budget = pm.computePositionBudget(0, 0.95);
+    expect(budget).toBe(4.753);
   });
 
-  it("returns 0 when cash is below $1", async () => {
-    // cash=$0.50 — can't fund even the $1 minimum
+  it("returns 0 when cash is below share-based minimum", async () => {
+    // cash=$0.50, minBudget=4.753, cash < minBudget → 0
     await pm.deductCash(99.5);
-    const budget = pm.computePositionBudget(0);
+    const budget = pm.computePositionBudget(0, 0.95);
     expect(budget).toBe(0);
   });
 
-  it("returns 0 when cash < $1 even if portfolio value is high", async () => {
+  it("returns 0 when cash < minimum even if portfolio value is high", async () => {
     await pm.deductCash(99.5);
-    // Portfolio = 0.5 cash + 100 positions = 100.5, but cash < $1 → blocked
-    const budget = pm.computePositionBudget(100);
+    // cash=0.5, minBudget=4.753, cash < minBudget → 0
+    const budget = pm.computePositionBudget(100, 0.95);
     expect(budget).toBe(0);
   });
 

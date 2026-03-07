@@ -18,14 +18,19 @@ function snapshotOrderbook(orderbook: Orderbook, depth = 5) {
   };
 }
 
-/** Result of a simulated limit order fill */
+/** Result of a simulated FAK (Fill-And-Kill) order fill */
 export interface ExecutionResult {
   averagePrice: number;
   totalShares: number;
   totalCost: number; // USD spent (before fees)
   fees: number; // Taker fee in USD
   netCost: number; // totalCost + fees
+  /** True when budget remains after exhausting all eligible ask levels */
   isPartialFill: boolean;
+  /** True when filled shares < orderbook min_order_size (Polymarket would reject this) */
+  belowMinimumOrderSize: boolean;
+  /** The min_order_size from the orderbook (default 5) */
+  minOrderSize: number;
   fillDetails: FillDetail[];
   orderbookSnapshot: unknown;
 }
@@ -38,23 +43,22 @@ interface FillDetail {
 }
 
 /**
- * Simulates a GTC limit BUY order execution.
+ * Simulates a FAK (Fill-And-Kill) taker BUY order execution.
  *
- * Models the end-of-window micro-profit strategy:
- *   1. Both YES and NO tokens have resting limit orders at 0.97 in the last minute.
- *   2. Only the WINNING token ever reaches 0.97 (the losing token goes to 0).
- *   3. When triggered, the order fills against resting asks at ≤ limitPrice.
+ * Walks the ask side of the live CLOB orderbook, filling shares at each price
+ * level up to the limit price, respecting available depth (size) at each level.
+ * Any unfilled budget is "killed" (returned unused) — matching Polymarket's
+ * FAK order semantics for time-sensitive entries.
  *
- * This is modelled as a TAKER fill (immediately crossing the spread). In the
- * real trade execution this would be a resting maker limit at 0.97, so actual
- * fees would be even lower (20% maker rebate), but the difference is negligible
- * at p≈0.97 where the effective fee rate is ~0.02%.
+ * After filling, enforces the orderbook's `min_order_size` (typically 5 shares).
+ * If the total filled shares fall below this minimum, the result is flagged
+ * with `belowMinimumOrderSize: true` — Polymarket would reject this order.
  *
- * Fee formula for 5-min / 15-min crypto markets (Polymarket docs):
- *   fee = C × 0.25 × (p × (1-p))^2
+ * Fee formula for crypto markets (Polymarket docs):
+ *   fee_per_share = 0.25 × (p × (1-p))^2
  * At p=0.97: fee_per_share ≈ 0.000212 USDC (effective ~0.02%)
  *
- * @param orderbook   Live CLOB orderbook snapshot
+ * @param orderbook   Live CLOB orderbook snapshot (includes asks with price+size)
  * @param usdAmount   USDC budget for this order
  * @param limitPrice  Maximum price we are willing to pay per share
  */
@@ -110,13 +114,19 @@ export function simulateLimitBuy(
     });
   }
 
-  const isPartialFill = remainingUsd.gt(new Decimal(usdAmount).mul(0.1)); // >10% unfilled
+  // Partial fill = budget remaining after walking all eligible asks
+  const isPartialFill = remainingUsd.gt(0) && totalShares.gt(0);
   const avgPrice = totalShares.gt(0)
     ? totalCost.div(totalShares).toNumber()
     : 0;
 
   // Round fees to 4 decimal places (Polymarket precision)
   const roundedFees = Math.round(totalFees.toNumber() * 10000) / 10000;
+
+  // Enforce Polymarket's min_order_size (default 5 shares)
+  const minOrderSize = parseFloat(orderbook.min_order_size ?? "5") || 5;
+  const belowMinimumOrderSize =
+    totalShares.gt(0) && totalShares.lt(minOrderSize);
 
   if (totalShares.gt(0)) {
     logger.debug(
@@ -127,8 +137,10 @@ export function simulateLimitBuy(
         fees: roundedFees.toFixed(4),
         levels: fillDetails.length,
         partial: isPartialFill,
+        belowMin: belowMinimumOrderSize,
+        minOrderSize,
       },
-      "Limit buy simulated",
+      "FAK buy simulated",
     );
   }
 
@@ -139,6 +151,8 @@ export function simulateLimitBuy(
     fees: roundedFees,
     netCost: totalCost.toNumber() + roundedFees,
     isPartialFill,
+    belowMinimumOrderSize,
+    minOrderSize,
     fillDetails,
     orderbookSnapshot: snapshotOrderbook(orderbook),
   };
@@ -165,7 +179,7 @@ export function simulateLimitBuy(
  *
  * Fees are rounded to 4 decimal places (smallest fee unit: 0.0001 USDC).
  */
-function calculateFeePerShare(price: number): number {
+export function calculateFeePerShare(price: number): number {
   const feeRate = CRYPTO_FEE.RATE; // 0.25 for crypto
   const exponent = CRYPTO_FEE.EXPONENT; // 2
   const pq = price * (1 - price); // p × (1-p), maximised at p=0.5

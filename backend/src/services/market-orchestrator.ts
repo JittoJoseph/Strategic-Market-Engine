@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
-import { WINDOW_CONFIGS, type Orderbook } from "../types/index.js";
+import { WINDOW_CONFIGS } from "../types/index.js";
 import {
   getDb,
   createSimulatedTrade,
@@ -33,12 +33,7 @@ import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { PortfolioManager } from "./portfolio-manager.js";
 
-import type {
-  PriceUpdateEvent,
-  BestBidAskEvent,
-  MarketResolvedEvent,
-  OrderbookUpdateEvent,
-} from "../interfaces/websocket-types.js";
+import type { MarketResolvedEvent } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
 
@@ -153,7 +148,6 @@ export class MarketOrchestrator extends EventEmitter {
         tradeWindowSec: config.strategy.tradeFromWindowSeconds,
         maxPositions: config.strategy.maxSimultaneousPositions,
         startingCapital: config.portfolio.startingCapital,
-        portfolioSlots: config.portfolio.slots,
       },
       "Starting market orchestrator",
     );
@@ -385,24 +379,21 @@ export class MarketOrchestrator extends EventEmitter {
       }
     });
 
-    // WS → token price updates (price_change and best_bid_ask both call the same handler)
-    this.wsWatcher.on("priceUpdate", (ev: PriceUpdateEvent) =>
+    // WS → token price updates (both events carry best_bid/best_ask)
+    const handlePriceEvent = (ev: {
+      tokenId: string;
+      bestBid: string;
+      bestAsk: string;
+    }) =>
       this.onTokenPriceUpdate(
         ev.tokenId,
         parseFloat(ev.bestBid),
         parseFloat(ev.bestAsk),
-      ),
-    );
-    this.wsWatcher.on("bestBidAskUpdate", (ev: BestBidAskEvent) =>
-      this.onTokenPriceUpdate(
-        ev.tokenId,
-        parseFloat(ev.bestBid),
-        parseFloat(ev.bestAsk),
-      ),
-    );
-    this.wsWatcher.on("orderbookUpdate", (_ev: OrderbookUpdateEvent) => {
-      // Orderbook is fetched on-demand during trade execution, not cached
-    });
+      );
+    this.wsWatcher.on("priceUpdate", handlePriceEvent);
+    this.wsWatcher.on("bestBidAskUpdate", handlePriceEvent);
+
+    // WS → market resolution
     this.wsWatcher.on("marketResolved", (ev: MarketResolvedEvent) =>
       this.onMarketResolved(ev),
     );
@@ -691,14 +682,19 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   /**
-   * Execute a simulated trade when the strategy detects an opportunity.
+   * Execute a simulated FAK (Fill-And-Kill) trade when the strategy detects an opportunity.
+   *
+   * Flow:
+   *   1. Fetch live orderbook (depth-aware)
+   *   2. Compute position budget using share-based minimum
+   *   3. Simulate FAK buy — walk asks, fill what's available, kill the rest
+   *   4. Enforce Polymarket min_order_size (reject if filled < 5 shares)
+   *   5. Deduct actual fill cost from cash, persist trade
    */
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
     if (this.paused) return;
 
-    // Guard against concurrent executions for the same token (race condition
-    // where two price-update events fire close together before the first
-    // async DB insert completes, causing a unique-constraint violation).
+    // Guard against concurrent executions for the same token
     if (this.inFlightTokenIds.has(opp.tokenId)) {
       logger.debug(
         { tokenId: opp.tokenId, marketId: opp.marketId },
@@ -711,37 +707,45 @@ export class MarketOrchestrator extends EventEmitter {
     const config = getConfig();
 
     try {
-      // ── Portfolio position sizing ────────────────────────────
-      // Compute budget = portfolioValue / slots, where portfolioValue includes
-      // the estimated value of all open positions at current bid prices.
-      const openPositionsValue = this.computeOpenPositionsValue();
-      const positionBudget =
-        this.portfolioManager.computePositionBudget(openPositionsValue);
-
-      if (positionBudget <= 0) {
-        logger.info(
-          { openPositionsValue, cash: this.portfolioManager.getCashBalance() },
-          "Insufficient portfolio value for new position — skipping",
-        );
-        return;
-      }
-
-      // Fetch the full orderbook for this token
+      // ── 1. Fetch live orderbook first (need depth for realistic fill) ──
       const orderbookResult = await this.client.getOrderbook(opp.tokenId);
       if (!orderbookResult?.data || !orderbookResult.data.asks?.length) {
         logger.warn(
           { tokenId: opp.tokenId },
           "No orderbook available — will retry on next price update",
         );
-        // Reset so we retry on the next tick rather than missing this window.
         this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
       const orderbook = orderbookResult.data;
 
-      // Simulate the limit buy using maxEntryPrice as the GTC limit.
-      // Uses the CRYPTO_FEE formula (no explicit fee rate needed — it's computed
-      // per-share from the fill price inside the simulator).
+      // Extract best ask from the live orderbook (sorted ascending)
+      const sortedAsks = [...orderbook.asks].sort(
+        (a, b) => parseFloat(a.price) - parseFloat(b.price),
+      );
+      const bestAskPrice =
+        sortedAsks.length > 0 ? parseFloat(sortedAsks[0]!.price) : opp.bestAsk;
+
+      // ── 2. Compute position budget (share-based minimum) ──────────
+      const openPositionsValue = this.computeOpenPositionsValue();
+      const positionBudget = this.portfolioManager.computePositionBudget(
+        openPositionsValue,
+        bestAskPrice,
+      );
+
+      if (positionBudget <= 0) {
+        logger.info(
+          {
+            openPositionsValue,
+            cash: this.portfolioManager.getCashBalance(),
+            bestAskPrice,
+          },
+          "Insufficient cash for minimum share count — skipping",
+        );
+        return;
+      }
+
+      // ── 3. Simulate FAK buy — walk asks, respect depth at each level ──
       const execution = simulateLimitBuy(
         orderbook,
         positionBudget,
@@ -753,9 +757,23 @@ export class MarketOrchestrator extends EventEmitter {
           {
             tokenId: opp.tokenId,
             maxEntryPrice: config.strategy.maxEntryPrice,
-            bestAsk: opp.bestAsk,
+            bestAsk: bestAskPrice,
           },
           "No fill — all asks above maxEntryPrice; will retry",
+        );
+        this.strategyEngine.clearEvaluated(opp.tokenId);
+        return;
+      }
+
+      // ── 4. Enforce Polymarket's min_order_size ────────────────────
+      if (execution.belowMinimumOrderSize) {
+        logger.warn(
+          {
+            tokenId: opp.tokenId,
+            filled: execution.totalShares,
+            minOrderSize: execution.minOrderSize,
+          },
+          `Rejecting: filled ${execution.totalShares.toFixed(2)} shares < min_order_size ${execution.minOrderSize}`,
         );
         this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
@@ -775,7 +793,7 @@ export class MarketOrchestrator extends EventEmitter {
         return;
       }
 
-      // ── Deduct actual cost from cash ─────────────────────────
+      // ── 5. Deduct actual cost from cash ─────────────────────────
       const actualCost = execution.netCost;
       const deducted = await this.portfolioManager.deductCash(actualCost);
       if (!deducted) {
@@ -794,6 +812,9 @@ export class MarketOrchestrator extends EventEmitter {
           )
         : null;
 
+      // Determine fill status for audit
+      const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
+
       const tradeRow = await createSimulatedTrade({
         marketId: opp.marketId,
         tokenId: opp.tokenId,
@@ -804,6 +825,7 @@ export class MarketOrchestrator extends EventEmitter {
         positionBudget: positionBudget.toFixed(6),
         actualCost: actualCost.toFixed(6),
         entryFees: execution.fees.toFixed(6),
+        fillStatus,
         btcPriceAtEntry: opp.btcPrice,
         btcTargetPrice: opp.btcTargetPrice,
         btcDistanceUsd: opp.btcDistanceUsd,

@@ -98,6 +98,13 @@ export const CRYPTO_FEE = {
   MAKER_REBATE_PERCENT: 0.2,
 } as const;
 
+/**
+ * Polymarket protocol minimum order size (in shares).
+ * Returned by the CLOB orderbook API as `min_order_size`.
+ * This is a protocol-level constant — not configurable.
+ */
+export const POLYMARKET_MIN_ORDER_SIZE = 5;
+
 // ============================================
 // Configuration Schema
 // ============================================
@@ -108,7 +115,6 @@ export const ConfigSchema = z.object({
   }),
   portfolio: z.object({
     startingCapital: z.number().min(1).max(10_000_000),
-    slots: z.number().int().min(1).max(100),
   }),
   strategy: z.object({
     marketWindow: z.enum(MARKET_WINDOWS),

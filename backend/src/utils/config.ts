@@ -34,7 +34,6 @@ export function loadConfig(): Config {
     },
     portfolio: {
       startingCapital: envNum("STARTING_CAPITAL", 100),
-      slots: envNum("PORTFOLIO_SLOTS", 5),
     },
     strategy: {
       marketWindow: env("MARKET_WINDOW", "5M"),

@@ -117,8 +117,7 @@ export interface SystemStats {
     maxEntryPrice: number;
     tradeFromWindowSeconds: number;
     startingCapital: number;
-    portfolioSlots: number;
-    maxSimultaneousPositions: number;
+    maxPositions: number;
     minBtcDistanceUsd: number;
     stopLossEnabled: boolean;
     stopLossPriceTrigger: number;

@@ -68,7 +68,7 @@ export const simulatedTrades = pgTable(
     windowType: text("window_type"), // 5M, 15M, etc.
     side: text("side").default("BUY").notNull(),
     outcomeLabel: text("outcome_label"), // "Up" or "Down"
-    orderType: text("order_type").default("LIMIT_GTC").notNull(),
+    orderType: text("order_type").default("FAK").notNull(),
     // Entry
     entryTs: timestamp("entry_ts").notNull(),
     entryPrice: decimal("entry_price", { precision: 18, scale: 8 }).notNull(),
