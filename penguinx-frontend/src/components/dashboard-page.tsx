@@ -368,6 +368,14 @@ export function DashboardPage() {
                     value={`$${stats.config.minBtcDistanceUsd}`}
                   />
                   <StatRow
+                    label="Momentum Filter"
+                    value={
+                      stats.config.momentumEnabled
+                        ? `$${stats?.config?.momentumMinChangeUsd}`
+                        : "DISABLED"
+                    }
+                  />
+                  <StatRow
                     label="Stop Loss"
                     value={
                       stats.config.stopLossEnabled
