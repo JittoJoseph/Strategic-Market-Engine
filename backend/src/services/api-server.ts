@@ -225,7 +225,23 @@ export class ApiServer {
         const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
         const markets = await db
-          .select()
+          .select({
+            id: schema.markets.id,
+            conditionId: schema.markets.conditionId,
+            slug: schema.markets.slug,
+            question: schema.markets.question,
+            windowType: schema.markets.windowType,
+            category: schema.markets.category,
+            endDate: schema.markets.endDate,
+            targetPrice: schema.markets.targetPrice,
+            active: schema.markets.active,
+            outcomes: schema.markets.outcomes,
+            clobTokenIds: schema.markets.clobTokenIds,
+            lastFetchedAt: schema.markets.lastFetchedAt,
+            createdAt: schema.markets.createdAt,
+            updatedAt: schema.markets.updatedAt,
+            metadata: schema.markets.metadata,
+          })
           .from(schema.markets)
           .orderBy(desc(schema.markets.endDate))
           .limit(limit)

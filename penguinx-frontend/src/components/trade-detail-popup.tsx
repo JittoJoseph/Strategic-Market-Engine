@@ -292,7 +292,7 @@ export function TradeDetailPopup({
                 )}
                 {trade.crossovers && (
                   <Cell
-                    label="LAST 60S CROSSOVERS"
+                    label="CROSSOVERS BEFORE ENTRY"
                     value={
                       <span
                         className="cursor-help"

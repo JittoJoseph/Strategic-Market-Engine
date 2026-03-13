@@ -25,6 +25,99 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+function CrossoverTimeline({
+  crossovers,
+  trades,
+  marketStart,
+  marketEnd,
+}: {
+  crossovers: Array<{ side: "UP" | "DOWN"; ts: number }>;
+  trades: SimulatedTrade[];
+  marketStart: number;
+  marketEnd: number;
+}) {
+  const duration = marketEnd - marketStart;
+  if (duration <= 0) return null;
+
+  // Sort crossovers by timestamp
+  const sortedCrossovers = [...crossovers].sort((a, b) => a.ts - b.ts);
+
+  // Generate minute markers
+  const minuteMarkers = [];
+  const totalMinutes = Math.ceil(duration / (60 * 1000));
+  for (let i = 0; i <= totalMinutes; i++) {
+    const timeMs = marketStart + i * 60 * 1000;
+    if (timeMs <= marketEnd) {
+      const position = ((timeMs - marketStart) / duration) * 100;
+      minuteMarkers.push({ time: timeMs, position });
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="relative">
+        {/* Timeline background */}
+        <div className="relative h-12 bg-muted/20 rounded border">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full h-px bg-border/30"></div>
+          </div>
+
+          {/* Crossover points */}
+          {sortedCrossovers.map((crossover, i) => {
+            const position = ((crossover.ts - marketStart) / duration) * 100;
+            return (
+              <div
+                key={i}
+                className="absolute top-1/2 transform -translate-y-1/2 -translate-x-1/2"
+                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
+                title={`${crossover.side} crossover @ ${new Date(crossover.ts).toLocaleTimeString()}`}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    crossover.side === "UP"
+                      ? "bg-green-500/70"
+                      : "bg-red-500/70"
+                  } border border-white/50`}
+                />
+              </div>
+            );
+          })}
+
+          {/* Trade entry lines */}
+          {trades.map((trade, i) => {
+            const entryTime = new Date(trade.entryTs).getTime();
+            const position = ((entryTime - marketStart) / duration) * 100;
+            return (
+              <div
+                key={`trade-${i}`}
+                className="absolute top-0 bottom-0 w-px bg-blue-500/50"
+                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
+                title={`Trade entry @ ${new Date(trade.entryTs).toLocaleTimeString()}`}
+              />
+            );
+          })}
+        </div>
+
+        {/* Minute markers */}
+        <div className="relative mt-1 pb-4">
+          {minuteMarkers.map((marker, i) => (
+            <div
+              key={i}
+              className="absolute transform -translate-x-1/2"
+              style={{ left: `${marker.position}%` }}
+            >
+              <div className="w-px h-2 bg-border/50"></div>
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5 text-center font-mono">
+                {i}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Section({
   title,
   children,
@@ -116,9 +209,19 @@ export function MarketDetailModal({
   const crossovers = market.metadata?.crossovers || [];
   const marketTrades = trades.filter((trade) => trade.marketId === market.id);
 
+  // Calculate crossovers before entry for trades
+  const tradeCrossoverCounts = marketTrades.map((trade) => {
+    const entryTime = new Date(trade.entryTs).getTime();
+    const windowStart = entryTime - 60 * 1000; // 60 seconds before entry
+    const count = crossovers.filter(
+      (c) => c.ts >= windowStart && c.ts <= entryTime,
+    ).length;
+    return { trade, count };
+  });
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="w-[calc(100%-2rem)] sm:w-full sm:max-w-[520px] font-mono bg-background border-border/30 flex flex-col max-h-[90dvh] gap-0 p-0 overflow-hidden rounded-xl">
+      <DialogContent className="w-[calc(100%-2rem)] sm:w-full sm:max-w-[520px] font-mono bg-background border-border/30 max-h-[90dvh] gap-0 p-0 overflow-hidden rounded-xl">
         {/* ── HEADER ── */}
         <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border/20">
           <div className="flex items-start justify-between gap-3">
@@ -161,7 +264,7 @@ export function MarketDetailModal({
         </div>
 
         {/* ── SCROLLABLE BODY ── */}
-        <div className="overflow-y-auto flex-1 overscroll-contain">
+        <div className="overscroll-contain">
           {/* ── MARKET INFO ── */}
           <Section title="MARKET INFO">
             <Row2>
@@ -205,44 +308,57 @@ export function MarketDetailModal({
           {/* ── OSCILLATION ── */}
           {crossovers.length > 0 && (
             <Section title="OSCILLATION">
-              <Row2>
-                <Cell
-                  label="TOTAL CROSSOVERS"
-                  value={
+              <div className="px-4 pb-4 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-mono text-muted-foreground">
+                    TOTAL CROSSOVERS: {crossovers.length}
+                  </span>
+                  {tradeCrossoverCounts.length > 0 && (
                     <span
-                      className="cursor-help"
-                      title={crossovers
-                        .map(
-                          (c) =>
-                            `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                        )
-                        .join(" | ")}
+                      className={`text-xs font-mono ${
+                        tradeCrossoverCounts[0].count >= 3
+                          ? "text-red-500"
+                          : "text-green-600"
+                      }`}
                     >
-                      {crossovers.length}
+                      CROSSOVERS BEFORE ENTRY: {tradeCrossoverCounts[0].count}
                     </span>
+                  )}
+                  <div className="flex gap-3">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-green-500/70"></div>
+                      <span className="text-xs text-muted-foreground">UP</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-red-500/70"></div>
+                      <span className="text-xs text-muted-foreground">
+                        DOWN
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-px h-4 bg-blue-500/50"></div>
+                      <span className="text-xs text-muted-foreground">
+                        Trade Entry
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <CrossoverTimeline
+                  crossovers={crossovers}
+                  trades={marketTrades}
+                  marketStart={
+                    market.endDate
+                      ? new Date(market.endDate).getTime() - 5 * 60 * 1000 // 5 minutes before end
+                      : Date.now() - 24 * 60 * 60 * 1000 // fallback
+                  }
+                  marketEnd={
+                    market.endDate
+                      ? new Date(market.endDate).getTime()
+                      : Date.now()
                   }
                 />
-                <Cell
-                  label="LAST 60S CROSSOVERS"
-                  value={
-                    <span
-                      className="cursor-help"
-                      title={crossovers
-                        .filter((c) => c.ts >= Date.now() - 60000)
-                        .map(
-                          (c) =>
-                            `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                        )
-                        .join(" | ")}
-                    >
-                      {
-                        crossovers.filter((c) => c.ts >= Date.now() - 60000)
-                          .length
-                      }
-                    </span>
-                  }
-                />
-              </Row2>
+              </div>
             </Section>
           )}
 
