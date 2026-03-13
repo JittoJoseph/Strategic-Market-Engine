@@ -10,7 +10,7 @@ import {
   loadOpenTradesWithMarkets,
 } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, gte, sql } from "drizzle-orm";
 
 import { getMarketScanner, MarketScanner } from "./market-scanner.js";
 import {
@@ -1598,7 +1598,7 @@ export class MarketOrchestrator extends EventEmitter {
     const db = getDb();
     db.update(schema.markets)
       .set({
-        metadata: { crossovers } as any,
+        metadata: sql`${schema.markets.metadata} || ${JSON.stringify({ crossovers })}`,
         updatedAt: new Date(),
       })
       .where(eq(schema.markets.id, marketId))

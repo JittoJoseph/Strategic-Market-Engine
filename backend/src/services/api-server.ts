@@ -17,6 +17,7 @@ import {
   type TimePeriod,
 } from "./performance-calculator.js";
 import { runMonteCarloAnalysis } from "./monte-carlo.js";
+import type { Crossover } from "./strategy-engine.js";
 
 const logger = createModuleLogger("api-server");
 
@@ -270,6 +271,7 @@ export class ApiServer {
             marketEndDate: schema.markets.endDate,
             marketSlug: schema.markets.slug,
             marketQuestion: schema.markets.question,
+            marketMetadata: schema.markets.metadata,
           })
           .from(schema.simulatedTrades)
           .leftJoin(
@@ -286,12 +288,27 @@ export class ApiServer {
             : await baseQuery;
 
         res.json(
-          rows.map((r) => ({
-            ...r.trade,
-            marketEndDate: r.marketEndDate ?? null,
-            marketSlug: r.marketSlug ?? null,
-            marketQuestion: r.marketQuestion ?? null,
-          })),
+          rows.map((r) => {
+            const crossovers = (r.marketMetadata as any)?.crossovers as
+              | Crossover[]
+              | undefined;
+            const entryTs = new Date(r.trade.entryTs).getTime();
+            const last60sCrossovers =
+              crossovers?.filter((c) => c.ts >= entryTs - 60_000) || [];
+            const allCrossovers = crossovers || [];
+
+            return {
+              ...r.trade,
+              marketEndDate: r.marketEndDate ?? null,
+              marketSlug: r.marketSlug ?? null,
+              marketQuestion: r.marketQuestion ?? null,
+              crossovers: {
+                all: allCrossovers.length,
+                last60s: last60sCrossovers.length,
+                details: allCrossovers, // Send full details for hover
+              },
+            };
+          }),
         );
       } catch (error) {
         logger.error({ error }, "Trades error");

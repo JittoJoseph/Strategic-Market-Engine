@@ -229,7 +229,8 @@ export function TradeDetailPopup({
           {(btcAtEntry !== null ||
             (btcTarget !== null && btcTarget > 0) ||
             (btcDist !== null && btcDist > 0) ||
-            trade.momentumDirection) && (
+            trade.momentumDirection ||
+            trade.crossovers) && (
             <Section title="BTC CONTEXT">
               <Row2>
                 {btcAtEntry !== null && (
@@ -263,6 +264,58 @@ export function TradeDetailPopup({
                             ).toFixed(0)}
                           </span>
                         )}
+                      </span>
+                    }
+                  />
+                )}
+                {trade.crossovers && (
+                  <Cell
+                    label="WINDOW CROSSOVERS"
+                    value={
+                      <span
+                        className="cursor-help"
+                        title={
+                          trade.crossovers.details.length > 0
+                            ? trade.crossovers.details
+                                .map(
+                                  (c) =>
+                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
+                                )
+                                .join(" | ")
+                            : "None"
+                        }
+                      >
+                        {trade.crossovers.all}
+                      </span>
+                    }
+                  />
+                )}
+                {trade.crossovers && (
+                  <Cell
+                    label="LAST 60S CROSSOVERS"
+                    value={
+                      <span
+                        className="cursor-help"
+                        title={
+                          trade.crossovers.details.filter(
+                            (c) =>
+                              c.ts >= new Date(trade.entryTs).getTime() - 60000,
+                          ).length > 0
+                            ? trade.crossovers.details
+                                .filter(
+                                  (c) =>
+                                    c.ts >=
+                                    new Date(trade.entryTs).getTime() - 60000,
+                                )
+                                .map(
+                                  (c) =>
+                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
+                                )
+                                .join(" | ")
+                            : "None"
+                        }
+                      >
+                        {trade.crossovers.last60s}
                       </span>
                     }
                   />

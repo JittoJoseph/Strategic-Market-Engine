@@ -48,6 +48,12 @@ export interface SimulatedTrade {
   marketQuestion: string | null;
   /** Lowest bestBid observed while position was open (before window close) */
   minPriceDuringPosition: string | null;
+  /** Crossover data for oscillation analysis */
+  crossovers?: {
+    all: number;
+    last60s: number;
+    details: Array<{ side: "UP" | "DOWN"; ts: number }>;
+  };
 }
 
 // ============================================
