@@ -5,8 +5,12 @@ import { Header } from "./header";
 import { SystemStatusIndicator } from "./system-status-indicator";
 import { TradesTable } from "./trades-table";
 import { TradeDetailPopup } from "./trade-detail-popup";
+import { MarketsPanel } from "./markets-panel";
+import { ActivityPanel } from "./activity-panel";
+import { MarketDetailModal } from "./market-detail-modal";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ExternalLink } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { ExternalLink, X } from "lucide-react";
 import { pnlColor, formatPnl } from "@/lib/utils";
 import {
   useTrades,
@@ -34,6 +38,9 @@ import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("trades");
   const [selectedTrade, setSelectedTrade] = useState<SimulatedTrade | null>(
+    null,
+  );
+  const [selectedMarket, setSelectedMarket] = useState<DiscoveredMarket | null>(
     null,
   );
   const [btcPrice, setBtcPrice] = useState<{
@@ -249,6 +256,7 @@ export function DashboardPage() {
                   markets={markets}
                   loading={marketsLoading}
                   refetch={refetchMarkets}
+                  onMarketClick={setSelectedMarket}
                 />
               </TabsContent>
 
@@ -412,6 +420,12 @@ export function DashboardPage() {
         onClose={() => setSelectedTrade(null)}
         marketSlug={selectedTradeSlug}
         marketQuestion={selectedTradeQuestion}
+      />
+
+      <MarketDetailModal
+        market={selectedMarket}
+        open={selectedMarket !== null}
+        onClose={() => setSelectedMarket(null)}
       />
     </div>
   );
@@ -1076,289 +1090,6 @@ function StatRow({
       >
         {value}
       </span>
-    </div>
-  );
-}
-
-function MarketsPanel({
-  markets,
-  loading,
-  refetch,
-}: {
-  markets: DiscoveredMarket[];
-  loading: boolean;
-  refetch?: () => void;
-}) {
-  // Auto-refresh when the active market ends
-  useEffect(() => {
-    if (!refetch || markets.length === 0) return;
-
-    const activeMarket = markets.find(
-      (m) => m.computedStatus === "ACTIVE" || m.active,
-    );
-    if (!activeMarket?.endDate) return;
-
-    const endTime = new Date(activeMarket.endDate).getTime();
-    const now = Date.now();
-    const timeUntilEnd = endTime - now;
-
-    if (timeUntilEnd > 0 && timeUntilEnd < 20 * 60 * 1000) {
-      const timer = setTimeout(() => {
-        refetch();
-      }, timeUntilEnd + 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [markets, refetch]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-sm text-muted-foreground font-mono animate-pulse">
-          Loading markets...
-        </div>
-      </div>
-    );
-  }
-
-  if (markets.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-sm text-muted-foreground font-mono">
-          No active markets discovered.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs font-mono">
-        <thead>
-          <tr className="border-b border-border/30 text-muted-foreground">
-            <th className="text-left py-2 px-2 font-medium">MARKET</th>
-            <th className="text-left py-2 px-2 font-medium">WINDOW</th>
-            <th className="text-left py-2 px-2 font-medium">STATUS</th>
-            <th className="text-right py-2 px-2 font-medium">TARGET</th>
-            <th className="text-right py-2 px-2 font-medium">ENDS</th>
-          </tr>
-        </thead>
-        <tbody>
-          {markets.map((market) => {
-            const label =
-              MARKET_WINDOW_LABELS[market.windowType as MarketWindow] ??
-              market.windowType;
-            const href = polymarketMarketUrl(market);
-
-            // Compute status from API's computedStatus field, fallback to
-            // local calculation
-            const status: "ACTIVE" | "ENDED" = market.computedStatus
-              ? market.computedStatus
-              : market.endDate &&
-                  new Date(market.endDate).getTime() > Date.now()
-                ? "ACTIVE"
-                : "ENDED";
-
-            const isActive = status === "ACTIVE";
-
-            return (
-              <tr
-                key={market.id}
-                className={`border-b border-border/10 transition-colors cursor-pointer ${
-                  isActive
-                    ? "bg-emerald-500/5 hover:bg-emerald-500/10"
-                    : "hover:bg-muted/20"
-                }`}
-                onClick={() =>
-                  window.open(href, "_blank", "noopener,noreferrer")
-                }
-                title="Open on Polymarket"
-              >
-                <td className="py-2.5 px-2 max-w-[200px]">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="truncate text-foreground font-medium">
-                      {market.question?.slice(0, 50) || market.id.slice(0, 16)}
-                    </span>
-                    <span className="truncate text-muted-foreground/70 text-[10px]">
-                      {market.id.slice(0, 20)}…
-                    </span>
-                  </div>
-                </td>
-                <td className="py-2.5 px-2">
-                  <span className="text-muted-foreground">{label}</span>
-                </td>
-                <td className="py-2.5 px-2">
-                  {isActive ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      ACTIVE
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                      ENDED
-                    </span>
-                  )}
-                </td>
-                <td className="py-2.5 px-2 text-right tabular-nums text-foreground">
-                  {market.targetPrice
-                    ? `$${parseFloat(market.targetPrice).toLocaleString()}`
-                    : "—"}
-                </td>
-                <td className="py-2.5 px-2 text-right tabular-nums text-muted-foreground">
-                  {market.endDate
-                    ? new Date(market.endDate).toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false,
-                      })
-                    : "—"}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ─── ActivityPanel ──────────────────────────────────────────────────────── */
-
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return new Date(ms).toLocaleDateString();
-}
-
-const KIND_META: Record<
-  ActivityEntry["kind"],
-  { dot: string; badge: string; label: string }
-> = {
-  TRADE_OPENED: {
-    dot: "bg-blue-400",
-    badge: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    label: "OPENED",
-  },
-  TRADE_WIN: {
-    dot: "bg-emerald-400",
-    badge: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    label: "WIN",
-  },
-  TRADE_LOSS: {
-    dot: "bg-red-400",
-    badge: "bg-red-500/10 text-red-400 border-red-500/20",
-    label: "LOSS",
-  },
-  MOMENTUM_SKIP: {
-    dot: "bg-amber-400",
-    badge: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    label: "SKIPPED",
-  },
-  MARKET_RESOLVED: {
-    dot: "bg-purple-400",
-    badge: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-    label: "RESOLVED",
-  },
-  SYSTEM: {
-    dot: "bg-muted-foreground/40",
-    badge: "bg-muted/40 text-muted-foreground border-border/30",
-    label: "SYSTEM",
-  },
-  INFO: {
-    dot: "bg-muted-foreground/40",
-    badge: "bg-muted/40 text-muted-foreground border-border/30",
-    label: "INFO",
-  },
-  WARN: {
-    dot: "bg-amber-500",
-    badge: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    label: "WARN",
-  },
-  ERROR: {
-    dot: "bg-red-500",
-    badge: "bg-red-500/10 text-red-400 border-red-500/20",
-    label: "ERROR",
-  },
-};
-
-function ActivityPanel({
-  activities,
-  loading,
-}: {
-  activities: ActivityEntry[];
-  loading: boolean;
-}) {
-  if (loading) {
-    return (
-      <div className="p-6 text-center text-xs text-muted-foreground font-mono animate-pulse">
-        Loading activity…
-      </div>
-    );
-  }
-
-  if (activities.length === 0) {
-    return (
-      <div className="p-6 text-center text-xs text-muted-foreground/40 font-mono">
-        No activity yet — trades and system events will appear here in
-        real-time.
-      </div>
-    );
-  }
-
-  return (
-    <div className="divide-y divide-border/10 overflow-y-auto max-h-[480px]">
-      {activities.map((entry) => {
-        const meta = KIND_META[entry.kind] ?? KIND_META["INFO"];
-        const hasPnl = entry.pnl !== undefined && entry.pnl !== null;
-
-        return (
-          <div
-            key={entry.id}
-            className="flex items-start gap-3 px-4 py-3 hover:bg-muted/10 transition-colors"
-          >
-            {/* Dot */}
-            <div className="mt-1.5 shrink-0">
-              <div className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-0.5">
-                {/* Kind badge */}
-                <span
-                  className={`text-[9px] font-mono font-bold border rounded px-1.5 py-0.5 ${meta.badge}`}
-                >
-                  {meta.label}
-                </span>
-
-                {/* PnL badge for trade results */}
-                {hasPnl && (
-                  <span
-                    className={`text-[9px] font-mono font-bold tabular-nums ${
-                      (entry.pnl ?? 0) >= 0
-                        ? "text-emerald-400"
-                        : "text-red-400"
-                    }`}
-                  >
-                    {formatPnl(entry.pnl ?? 0)}
-                  </span>
-                )}
-
-                {/* Timestamp */}
-                <span className="ml-auto text-[9px] font-mono text-muted-foreground/40 tabular-nums shrink-0">
-                  {timeAgo(entry.ts)}
-                </span>
-              </div>
-
-              {/* Detail line */}
-              <div className="text-xs font-mono text-muted-foreground leading-snug truncate">
-                {entry.detail}
-              </div>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }

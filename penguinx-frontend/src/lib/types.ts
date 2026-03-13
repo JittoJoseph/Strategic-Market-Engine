@@ -188,6 +188,10 @@ export interface DiscoveredMarket {
   updatedAt: string;
   /** Computed by the API: ACTIVE (window open) or ENDED (window closed) */
   computedStatus?: "ACTIVE" | "ENDED";
+  /** Market metadata including crossovers */
+  metadata?: {
+    crossovers?: Array<{ side: "UP" | "DOWN"; ts: number }>;
+  };
 }
 
 // ============================================
