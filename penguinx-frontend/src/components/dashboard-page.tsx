@@ -67,7 +67,10 @@ export function DashboardPage() {
   const {
     markets,
     loading: marketsLoading,
+    loadingMore: marketsLoadingMore,
+    hasMore: marketsHasMore,
     refetch: refetchMarkets,
+    loadMore: loadMoreMarkets,
   } = useActiveMarkets();
   const { activities, loading: activitiesLoading } = useActivityLog();
 
@@ -254,7 +257,11 @@ export function DashboardPage() {
               <TabsContent value="markets" className="mt-0">
                 <MarketsPanel
                   markets={markets}
+                  trades={trades}
                   loading={marketsLoading}
+                  loadingMore={marketsLoadingMore}
+                  hasMore={marketsHasMore}
+                  onLoadMore={loadMoreMarkets}
                   refetch={refetchMarkets}
                   onMarketClick={setSelectedMarket}
                 />
@@ -424,6 +431,7 @@ export function DashboardPage() {
 
       <MarketDetailModal
         market={selectedMarket}
+        trades={trades}
         open={selectedMarket !== null}
         onClose={() => setSelectedMarket(null)}
       />

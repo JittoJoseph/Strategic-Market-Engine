@@ -203,19 +203,31 @@ export function useSystemStats() {
 }
 
 /**
- * Hook to fetch active markets list (DB-backed, for the Markets tab table).
+ * Hook to fetch active markets list with pagination (DB-backed, for the Markets tab table).
  */
 export function useActiveMarkets() {
   const [markets, setMarkets] = useState<DiscoveredMarket[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // Tracks DB-fetched row count (WS-updated rows don't count toward offset)
+  const dbFetchedRef = useRef(0);
+
+  const PAGE_SIZE = 20;
 
   const fetchMarkets = useCallback(async () => {
     try {
       setLoading(true);
+      dbFetchedRef.current = 0;
       const api = getApiClient();
-      const response = await api.getMarkets();
+      const response = await api.getMarkets({
+        limit: PAGE_SIZE,
+        offset: 0,
+      });
       setMarkets(response);
+      dbFetchedRef.current = response.length;
+      setHasMore(response.length === PAGE_SIZE);
       setError(null);
     } catch (err) {
       setError(err as Error);
@@ -224,11 +236,41 @@ export function useActiveMarkets() {
     }
   }, []);
 
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return;
+    try {
+      setLoadingMore(true);
+      const api = getApiClient();
+      const response = await api.getMarkets({
+        limit: PAGE_SIZE,
+        offset: dbFetchedRef.current,
+      });
+      dbFetchedRef.current += response.length;
+      setMarkets((prev) => {
+        const ids = new Set(prev.map((m) => m.id));
+        return [...prev, ...response.filter((m) => !ids.has(m.id))];
+      });
+      setHasMore(response.length === PAGE_SIZE);
+    } catch {
+      // silent — keep existing markets visible
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore]);
+
   useEffect(() => {
     fetchMarkets();
   }, [fetchMarkets]);
 
-  return { markets, loading, error, refetch: fetchMarkets };
+  return {
+    markets,
+    loading,
+    loadingMore,
+    hasMore,
+    error,
+    refetch: fetchMarkets,
+    loadMore,
+  };
 }
 
 /**

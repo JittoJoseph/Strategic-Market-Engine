@@ -2,11 +2,12 @@
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
-import type { DiscoveredMarket } from "@/lib/types";
+import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 
 interface MarketDetailModalProps {
   market: DiscoveredMarket | null;
+  trades: SimulatedTrade[];
   open: boolean;
   onClose: () => void;
 }
@@ -101,6 +102,7 @@ function formatTimeAgo(endTime: number): string {
 
 export function MarketDetailModal({
   market,
+  trades,
   open,
   onClose,
 }: MarketDetailModalProps) {
@@ -112,6 +114,7 @@ export function MarketDetailModal({
     market.windowType;
   const polyUrl = polymarketMarketUrl(market);
   const crossovers = market.metadata?.crossovers || [];
+  const marketTrades = trades.filter((trade) => trade.marketId === market.id);
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -240,6 +243,92 @@ export function MarketDetailModal({
                   }
                 />
               </Row2>
+            </Section>
+          )}
+
+          {/* ── TRADES ── */}
+          {marketTrades.length > 0 && (
+            <Section title="TRADES">
+              {marketTrades.map((trade) => (
+                <div
+                  key={trade.id}
+                  className="px-4 py-3 border-b border-border/10 last:border-b-0"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                          trade.outcomeLabel === "Up"
+                            ? "text-emerald-400 border-emerald-400/25 bg-emerald-400/5"
+                            : "text-red-400 border-red-400/25 bg-red-400/5"
+                        }`}
+                      >
+                        {trade.outcomeLabel || "UNKNOWN"}
+                      </span>
+                      <span
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                          trade.status === "OPEN"
+                            ? "text-blue-400 border-blue-400/25 bg-blue-400/5"
+                            : trade.realizedPnl &&
+                                parseFloat(trade.realizedPnl) > 0
+                              ? "text-emerald-400 border-emerald-400/25 bg-emerald-400/5"
+                              : "text-red-400 border-red-400/25 bg-red-400/5"
+                        }`}
+                      >
+                        {trade.status === "OPEN"
+                          ? "OPEN"
+                          : trade.realizedPnl &&
+                              parseFloat(trade.realizedPnl) > 0
+                            ? "WIN"
+                            : "LOSS"}
+                      </span>
+                    </div>
+                    {trade.realizedPnl && (
+                      <span
+                        className={`text-[10px] font-mono font-bold tabular-nums ${
+                          parseFloat(trade.realizedPnl) >= 0
+                            ? "text-emerald-400"
+                            : "text-red-400"
+                        }`}
+                      >
+                        ${parseFloat(trade.realizedPnl).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-[10px] font-mono">
+                    <div>
+                      <span className="text-muted-foreground/60">ENTRY:</span>
+                      <span className="ml-1 tabular-nums">
+                        ${parseFloat(trade.entryPrice).toFixed(4)} ×{" "}
+                        {parseFloat(trade.entryShares).toFixed(2)}
+                      </span>
+                    </div>
+                    {trade.exitPrice && (
+                      <div>
+                        <span className="text-muted-foreground/60">EXIT:</span>
+                        <span className="ml-1 tabular-nums">
+                          ${parseFloat(trade.exitPrice).toFixed(4)}
+                        </span>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-muted-foreground/60">
+                        BTC @ ENTRY:
+                      </span>
+                      <span className="ml-1 tabular-nums">
+                        $
+                        {parseFloat(
+                          trade.btcPriceAtEntry || "0",
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground/60">TIME:</span>
+                      <span className="ml-1">{formatTs(trade.entryTs)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </Section>
           )}
         </div>

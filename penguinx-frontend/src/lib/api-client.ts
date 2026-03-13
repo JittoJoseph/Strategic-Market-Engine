@@ -76,8 +76,16 @@ export class ApiClient {
     return response.json();
   }
 
-  async getMarkets(): Promise<DiscoveredMarket[]> {
-    return fetchWithRetry(`${this.baseUrl}/api/markets`);
+  async getMarkets(params?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<DiscoveredMarket[]> {
+    const searchParams = new URLSearchParams();
+    if (params?.limit) searchParams.set("limit", String(params.limit));
+    if (params?.offset) searchParams.set("offset", String(params.offset));
+
+    const qs = searchParams.toString();
+    return fetchWithRetry(`${this.baseUrl}/api/markets${qs ? `?${qs}` : ""}`);
   }
 
   async getSystemStats(): Promise<SystemStats> {

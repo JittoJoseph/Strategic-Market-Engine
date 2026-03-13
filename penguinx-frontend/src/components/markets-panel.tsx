@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect } from "react";
-import type { DiscoveredMarket } from "@/lib/types";
+import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 
 interface MarketsPanelProps {
   markets: DiscoveredMarket[];
+  trades: SimulatedTrade[];
   loading: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
   refetch?: () => void;
   onMarketClick: (market: DiscoveredMarket) => void;
 }
@@ -16,14 +20,38 @@ function polymarketMarketUrl(market: DiscoveredMarket): string {
   return `https://polymarket.com/market/${market.id}`;
 }
 
-function formatTimeRemaining(endTime: number): string {
-  const now = Date.now();
-  const diff = endTime - now;
-  if (diff <= 0) return "ENDED";
+function formatTimeRange(market: DiscoveredMarket): string {
+  if (!market.endDate) return "—";
 
-  const minutes = Math.floor(diff / 60000);
-  const seconds = Math.floor((diff % 60000) / 1000);
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  const endDate = new Date(market.endDate);
+  const timeStr = endDate.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return `${timeStr}`;
+}
+
+function getMarketTradeStatus(
+  market: DiscoveredMarket,
+  trades: SimulatedTrade[],
+): { tookTrade: boolean; outcome: "WIN" | "LOSS" | null } {
+  const marketTrades = trades.filter((trade) => trade.marketId === market.id);
+  if (marketTrades.length === 0) {
+    return { tookTrade: false, outcome: null };
+  }
+
+  // Check if any trade has a realized P&L (indicating it's resolved)
+  const resolvedTrade = marketTrades.find(
+    (trade) => trade.realizedPnl !== null,
+  );
+  if (resolvedTrade) {
+    const pnl = parseFloat(resolvedTrade.realizedPnl || "0");
+    return { tookTrade: true, outcome: pnl > 0 ? "WIN" : "LOSS" };
+  }
+
+  // If there are open trades, we took a trade but it's not resolved yet
+  return { tookTrade: true, outcome: null };
 }
 
 function formatTimeAgo(endTime: number): string {
@@ -39,9 +67,23 @@ function formatTimeAgo(endTime: number): string {
   return `${days}d ago`;
 }
 
+function formatTimeRemaining(endTime: number): string {
+  const now = Date.now();
+  const diff = endTime - now;
+  if (diff <= 0) return "ENDED";
+
+  const minutes = Math.floor(diff / 60000);
+  const seconds = Math.floor((diff % 60000) / 1000);
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export function MarketsPanel({
   markets,
+  trades,
   loading,
+  loadingMore = false,
+  hasMore = false,
+  onLoadMore,
   refetch,
   onMarketClick,
 }: MarketsPanelProps) {
@@ -91,9 +133,10 @@ export function MarketsPanel({
       <table className="w-full text-xs font-mono">
         <thead>
           <tr className="border-b border-border/30 text-muted-foreground">
-            <th className="text-left py-2 px-2 font-medium">MARKET</th>
+            <th className="text-left py-2 px-2 font-medium">TIME</th>
             <th className="text-left py-2 px-2 font-medium">WINDOW</th>
             <th className="text-left py-2 px-2 font-medium">STATUS</th>
+            <th className="text-center py-2 px-2 font-medium">TRADE</th>
             <th className="text-right py-2 px-2 font-medium">CROSSOVERS</th>
             <th className="text-right py-2 px-2 font-medium">TIME LEFT</th>
           </tr>
@@ -115,6 +158,8 @@ export function MarketsPanel({
                 : "ENDED";
 
             const isActive = status === "ACTIVE";
+            const timeRange = formatTimeRange(market);
+            const tradeStatus = getMarketTradeStatus(market, trades);
 
             return (
               <tr
@@ -127,15 +172,10 @@ export function MarketsPanel({
                 onClick={() => onMarketClick(market)}
                 title="View market details"
               >
-                <td className="py-2.5 px-2 max-w-[200px]">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="truncate text-foreground font-medium">
-                      {market.question?.slice(0, 50) || market.id.slice(0, 16)}
-                    </span>
-                    <span className="truncate text-muted-foreground/70 text-[10px]">
-                      {market.id.slice(0, 20)}…
-                    </span>
-                  </div>
+                <td className="py-2.5 px-2">
+                  <span className="text-foreground font-medium tabular-nums">
+                    {timeRange}
+                  </span>
                 </td>
                 <td className="py-2.5 px-2">
                   <span className="text-muted-foreground">{label}</span>
@@ -143,12 +183,32 @@ export function MarketsPanel({
                 <td className="py-2.5 px-2">
                   {isActive ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       ACTIVE
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20">
                       ENDED
+                    </span>
+                  )}
+                </td>
+                <td className="py-2.5 px-2 text-center">
+                  {tradeStatus.tookTrade ? (
+                    tradeStatus.outcome === "WIN" ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        WIN
+                      </span>
+                    ) : tradeStatus.outcome === "LOSS" ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/10 text-red-400 border border-red-500/20">
+                        LOSS
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        OPEN
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-muted-foreground/50 text-[10px]">
+                      —
                     </span>
                   )}
                 </td>
@@ -177,6 +237,26 @@ export function MarketsPanel({
           })}
         </tbody>
       </table>
+
+      {/* Show More */}
+      {(hasMore || loadingMore) && (
+        <div className="flex justify-center pt-3 pb-1">
+          <button
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded text-[11px] font-mono text-muted-foreground border border-border/30 hover:border-border/60 hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {loadingMore ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 animate-pulse" />
+                Loading…
+              </>
+            ) : (
+              "Show more"
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -218,9 +218,11 @@ export class ApiServer {
     });
 
     // Markets list — full DB-backed list of recent discovered markets.
-    this.app.get("/api/markets", async (_req, res) => {
+    this.app.get("/api/markets", async (req, res) => {
       try {
         const db = getDb();
+        const limit = Math.min(parseInt(req.query.limit as string) || 30, 200);
+        const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
         const now = new Date();
         const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
         const markets = await db
@@ -233,7 +235,8 @@ export class ApiServer {
             ),
           )
           .orderBy(desc(schema.markets.endDate))
-          .limit(30);
+          .limit(limit)
+          .offset(offset);
 
         const nowMs = now.getTime();
         const enriched = markets.map((m) => {
