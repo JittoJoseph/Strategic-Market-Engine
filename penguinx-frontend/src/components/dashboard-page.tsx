@@ -379,7 +379,7 @@ export function DashboardPage() {
                     label="Oscillation Filter"
                     value={
                       stats?.config?.oscillationFilterEnabled
-                        ? `$${stats?.config?.oscillationMaxCrossovers}`
+                        ? `${stats?.config?.oscillationMaxCrossovers} times`
                         : "DISABLED"
                     }
                   />
