@@ -480,10 +480,6 @@ function TopDashboardSection({
   // Get live unrealized PnL from open trades and current market prices
   const liveUnrealizedPnL = useUnrealizedPnL(trades, liveMarkets);
 
-  // Animate NET P&L with smooth counter
-  const netPnlBaseValue = parseFloat(performance?.totalPnl || "0");
-  const animatedNetPnl = useAnimatedNumber(netPnlBaseValue, 300);
-
   const isPaused = stats?.orchestrator.paused ?? false;
 
   const countdown = useCountdown(primaryMarket?.endDate ?? null);
@@ -515,7 +511,6 @@ function TopDashboardSection({
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   };
 
-  const netPnl = animatedNetPnl;
   const roi = parseFloat(performance?.roi || "0");
   const winRate = parseFloat(performance?.winRate || "0");
   const totalDeployed = parseFloat(performance?.totalDeployed || "0");
@@ -525,8 +520,6 @@ function TopDashboardSection({
   const portfolioValue = cashBalance + openPositionsValue;
   // Use live-calculated unrealized PnL instead of API value
   const unrealizedPnl = liveUnrealizedPnL;
-  // totalPnl from the API already sums only SETTLED trade realizedPnl — it IS realized PnL
-  const realizedPnl = netPnlBaseValue;
   const wins = performance?.wins || 0;
   const losses = performance?.losses || 0;
   const closedPositions = wins + losses;
@@ -537,7 +530,10 @@ function TopDashboardSection({
   const avgLoss = parseFloat(performance?.avgLoss || "0");
   const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
-  const windowType = stats?.config?.marketWindow || "15M";
+  const gainFromInitial = portfolioValue - initialCapital;
+  const animatedGainFromInitial = useAnimatedNumber(gainFromInitial, 300);
+  const mainDisplayValue = animatedGainFromInitial;
+  const windowType = stats?.config?.marketWindow || "5M";
 
   // Effective BTC price at window start: use captured value or fall back to entry price from trade
   const effectiveBtcAtStart =
@@ -825,9 +821,9 @@ function TopDashboardSection({
                   NET P&L
                 </div>
                 <div
-                  className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${pnlColor(netPnl)}`}
+                  className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${pnlColor(mainDisplayValue)}`}
                 >
-                  {formatPnl(netPnl)}
+                  {formatPnl(mainDisplayValue)}
                 </div>
                 <div
                   className={`text-xs font-mono mt-1 ${pnlColor(roi, "70")}`}
@@ -839,22 +835,28 @@ function TopDashboardSection({
               <div className="space-y-3 pt-1">
                 <div>
                   <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
-                    REALIZED
-                  </div>
-                  <div
-                    className={`text-sm font-bold font-mono tabular-nums ${pnlColor(realizedPnl)}`}
-                  >
-                    {formatPnl(realizedPnl)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
                     UNREALIZED
                   </div>
                   <div
                     className={`text-sm font-bold font-mono tabular-nums ${pnlColor(unrealizedPnl)}`}
                   >
                     {formatPnl(unrealizedPnl)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
+                    INITIAL CAPITAL
+                  </div>
+                  <div className="text-sm font-bold font-mono tabular-nums text-foreground">
+                    ${initialCapital.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
+                    CURRENT VALUE
+                  </div>
+                  <div className="text-sm font-bold font-mono tabular-nums text-foreground">
+                    ${portfolioValue.toFixed(2)}
                   </div>
                 </div>
               </div>
