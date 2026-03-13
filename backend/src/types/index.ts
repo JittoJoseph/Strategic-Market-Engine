@@ -130,6 +130,10 @@ export const ConfigSchema = z.object({
     momentumEnabled: z.boolean(),
     momentumLookbackMs: z.number().min(10_000).max(600_000),
     momentumMinChangeUsd: z.number().min(0).max(1000),
+    // Oscillation filter — skip opportunities when BTC is choppy around the target
+    oscillationFilterEnabled: z.boolean(),
+    oscillationWindowMs: z.number().min(10_000).max(300_000),
+    oscillationMaxCrossovers: z.number().min(1).max(20),
   }),
   admin: z.object({
     password: z.string().min(1),

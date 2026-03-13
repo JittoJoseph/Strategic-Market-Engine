@@ -21,6 +21,7 @@ import {
   getStrategyEngine,
   StrategyEngine,
   type MarketOpportunity,
+  type Crossover,
 } from "./strategy-engine.js";
 import {
   simulateLimitBuy,
@@ -1557,12 +1558,20 @@ export class MarketOrchestrator extends EventEmitter {
     // Safety: never clean up a market that still has open positions
     if (this.hasOpenPositionsForMarket(marketId)) return;
 
+    // Persist crossover data before unregistering (grab from either token — both track the same target)
+    const crossovers =
+      this.strategyEngine.getCrossoverData(state.yesTokenId) ??
+      this.strategyEngine.getCrossoverData(state.noTokenId);
+    if (crossovers && crossovers.length > 0) {
+      this.persistCrossoverData(marketId, crossovers);
+    }
+
     // Unsubscribe from WS
     if (state.subscribedWs) {
       this.wsWatcher.unsubscribe([state.yesTokenId, state.noTokenId]);
     }
 
-    // Unregister from strategy engine (also clears evaluatedTokens)
+    // Unregister from strategy engine (also clears evaluatedTokens + crossover data)
     this.strategyEngine.unregisterMarket(state.yesTokenId);
     this.strategyEngine.unregisterMarket(state.noTokenId);
 
@@ -1576,6 +1585,32 @@ export class MarketOrchestrator extends EventEmitter {
     this.tokenToMarket.delete(state.noTokenId);
 
     this.activeMarkets.delete(marketId);
+  }
+
+  /**
+   * Persist crossover data to the market's metadata column.
+   * Fire-and-forget — failure is non-fatal.
+   */
+  private persistCrossoverData(
+    marketId: string,
+    crossovers: Crossover[],
+  ): void {
+    const db = getDb();
+    db.update(schema.markets)
+      .set({
+        metadata: { crossovers } as any,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.markets.id, marketId))
+      .then(() =>
+        logger.debug(
+          { marketId, crossoverCount: crossovers.length },
+          "Persisted crossover data",
+        ),
+      )
+      .catch((err) =>
+        logger.debug({ err, marketId }, "Failed to persist crossover data"),
+      );
   }
 }
 

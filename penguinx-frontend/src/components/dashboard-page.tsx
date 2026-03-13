@@ -376,6 +376,14 @@ export function DashboardPage() {
                     }
                   />
                   <StatRow
+                    label="Oscillation Filter"
+                    value={
+                      stats?.config?.oscillationFilterEnabled
+                        ? `$${stats?.config?.oscillationMaxCrossovers}`
+                        : "DISABLED"
+                    }
+                  />
+                  <StatRow
                     label="Stop Loss"
                     value={
                       stats.config.stopLossEnabled

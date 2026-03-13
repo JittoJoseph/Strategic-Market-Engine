@@ -179,6 +179,9 @@ export class ApiServer {
             momentumEnabled: config.strategy.momentumEnabled,
             momentumLookbackMs: config.strategy.momentumLookbackMs,
             momentumMinChangeUsd: config.strategy.momentumMinChangeUsd,
+            oscillationFilterEnabled: config.strategy.oscillationFilterEnabled,
+            oscillationWindowMs: config.strategy.oscillationWindowMs,
+            oscillationMaxCrossovers: config.strategy.oscillationMaxCrossovers,
           },
         });
       } catch (error) {

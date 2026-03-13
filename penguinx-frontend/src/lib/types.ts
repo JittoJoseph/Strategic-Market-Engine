@@ -124,6 +124,8 @@ export interface SystemStats {
     momentumEnabled?: boolean;
     momentumLookbackMs?: number;
     momentumMinChangeUsd?: number;
+    oscillationFilterEnabled?: boolean;
+    oscillationMaxCrossovers?: number;
   };
   portfolio?: {
     cashBalance: number;

@@ -50,6 +50,10 @@ export function loadConfig(): Config {
       momentumEnabled: envBool("MOMENTUM_ENABLED", true),
       momentumLookbackMs: envNum("MOMENTUM_LOOKBACK_MS", 90_000),
       momentumMinChangeUsd: envNum("MOMENTUM_MIN_CHANGE_USD", 20),
+      // Oscillation filter
+      oscillationFilterEnabled: envBool("OSCILLATION_FILTER_ENABLED", true),
+      oscillationWindowMs: envNum("OSCILLATION_WINDOW_MS", 60_000),
+      oscillationMaxCrossovers: envNum("OSCILLATION_MAX_CROSSOVERS", 3),
     },
     admin: {
       password: env("ADMIN_PASSWORD"),

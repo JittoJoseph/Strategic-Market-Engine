@@ -24,6 +24,12 @@ export interface MarketOpportunity {
   momentum: MomentumSignal | null;
 }
 
+/** A recorded BTC crossover of the market's target price */
+export interface Crossover {
+  side: "UP" | "DOWN";
+  ts: number;
+}
+
 interface TokenPriceState {
   bestBid: number;
   bestAsk: number;
@@ -37,7 +43,12 @@ interface WatchedMarket {
   outcomeLabel: string;
   endDate: Date;
   targetPrice: number | null;
+  /** Timestamps when BTC crossed the target price */
+  crossovers: Crossover[];
+  /** Last known side of BTC relative to target — null until first BTC tick */
+  lastBtcSide: "UP" | "DOWN" | null;
 }
+
 export class StrategyEngine extends EventEmitter {
   private priceStates: Map<string, TokenPriceState> = new Map();
   private watchedMarkets: Map<string, WatchedMarket> = new Map(); // tokenId → market info
@@ -58,6 +69,8 @@ export class StrategyEngine extends EventEmitter {
       outcomeLabel,
       endDate,
       targetPrice,
+      crossovers: [],
+      lastBtcSide: null,
     });
   }
 
@@ -87,6 +100,11 @@ export class StrategyEngine extends EventEmitter {
     this.evaluatedTokens.clear();
   }
 
+  /** Get crossover data for a token (for persistence before unregister). */
+  getCrossoverData(tokenId: string): Crossover[] | null {
+    return this.watchedMarkets.get(tokenId)?.crossovers ?? null;
+  }
+
   getStats() {
     return {
       watchedTokens: this.watchedMarkets.size,
@@ -112,6 +130,12 @@ export class StrategyEngine extends EventEmitter {
 
     const market = this.watchedMarkets.get(tokenId);
     if (!market) return;
+
+    // ── Track BTC crossovers on every tick (even if we bail out early) ──
+    if (btcPriceData && btcPriceData.price > 0 && market.targetPrice !== null) {
+      this.trackCrossover(market, btcPriceData.price);
+    }
+
     if (this.evaluatedTokens.has(tokenId)) return;
 
     const config = getConfig();
@@ -140,14 +164,9 @@ export class StrategyEngine extends EventEmitter {
       return;
     }
 
-    // targetPrice is the BTC price at window open. It remains null until
-    // tryFillBtcWindowStart() sets it; skip until then.
     if (market.targetPrice === null) return;
 
-    const btcDistanceUsd = this.calculateBtcDistanceUsd(
-      btcPriceData.price,
-      market.targetPrice,
-    );
+    const btcDistanceUsd = Math.abs(btcPriceData.price - market.targetPrice);
 
     if (btcDistanceUsd < config.strategy.minBtcDistanceUsd) {
       logger.debug(
@@ -157,16 +176,15 @@ export class StrategyEngine extends EventEmitter {
       return;
     }
 
-    // ── Momentum Filter ───────────────────────────────────────────────────────
+    // ── Momentum Filter ───────────────────────────────────────────────
     if (config.strategy.momentumEnabled && momentumSignal !== null) {
-      const skip = this.checkMomentumFilter(
-        market.outcomeLabel,
-        momentumSignal,
-        midpoint,
-      );
-      if (skip) return;
+      if (this.checkMomentumFilter(market.outcomeLabel, momentumSignal)) return;
     }
-    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Oscillation Filter ────────────────────────────────────────────
+    if (config.strategy.oscillationFilterEnabled) {
+      if (this.checkOscillationFilter(market, config)) return;
+    }
 
     if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
       return;
@@ -208,23 +226,77 @@ export class StrategyEngine extends EventEmitter {
     this.emit("opportunityDetected", opportunity);
   }
 
+  // ── Crossover tracking ──────────────────────────────────────────────
+
+  /**
+   * Track whether BTC has crossed the target price.
+   * Called on every price tick to maintain an accurate crossover history.
+   */
+  private trackCrossover(market: WatchedMarket, btcPrice: number): void {
+    const currentSide: "UP" | "DOWN" =
+      btcPrice >= market.targetPrice! ? "UP" : "DOWN";
+
+    if (market.lastBtcSide !== null && currentSide !== market.lastBtcSide) {
+      market.crossovers.push({ side: currentSide, ts: Date.now() });
+    }
+
+    market.lastBtcSide = currentSide;
+  }
+
+  /**
+   * Oscillation filter — skip if BTC has crossed the target price too many
+   * times in the recent window, indicating choppy/oscillating price action
+   * that makes directional trades unreliable.
+   *
+   * Returns true if the trade should be SKIPPED.
+   */
+  private checkOscillationFilter(
+    market: WatchedMarket,
+    config: ReturnType<typeof getConfig>,
+  ): boolean {
+    const now = Date.now();
+    const windowStart = now - config.strategy.oscillationWindowMs;
+    let recentCount = 0;
+
+    // Count crossovers in the lookback window (iterate from end for efficiency)
+    for (let i = market.crossovers.length - 1; i >= 0; i--) {
+      if (market.crossovers[i]!.ts < windowStart) break;
+      recentCount++;
+    }
+
+    if (recentCount >= config.strategy.oscillationMaxCrossovers) {
+      logger.info(
+        {
+          marketId: market.marketId,
+          outcome: market.outcomeLabel,
+          crossovers: recentCount,
+          maxAllowed: config.strategy.oscillationMaxCrossovers,
+          windowMs: config.strategy.oscillationWindowMs,
+        },
+        "Skipping: BTC oscillating around target (choppy price action)",
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  // ── Momentum filter ─────────────────────────────────────────────────
+
   /**
    * Momentum alignment filter.
    *
-   * Filters based on:
-   * 1. Direction mismatch: market outcome disagrees with BTC momentum
-   * 2. Neutral momentum: BTC is ranging, no edge to trade
-   * 3. Extreme fade guard: market is ≥98¢ but momentum strongly disagrees
-   *    (when the crowd price is extreme but price action says otherwise — skip)
+   * Skips when:
+   * 1. No data yet (conservative)
+   * 2. Neutral momentum (BTC ranging, no edge)
+   * 3. Direction mismatch (outcome disagrees with BTC momentum)
    *
    * Returns true if the trade should be SKIPPED.
    */
   private checkMomentumFilter(
     outcomeLabel: string,
     momentum: MomentumSignal,
-    midpoint: number,
   ): boolean {
-    // No data yet — be conservative and skip
     if (!momentum.hasData) {
       logger.debug(
         { outcomeLabel },
@@ -233,7 +305,6 @@ export class StrategyEngine extends EventEmitter {
       return true;
     }
 
-    // Neutral momentum = BTC ranging, no directional edge
     if (momentum.direction === "NEUTRAL") {
       logger.info(
         {
@@ -246,7 +317,6 @@ export class StrategyEngine extends EventEmitter {
       return true;
     }
 
-    // UP outcome but BTC is going DOWN → skip
     if (outcomeLabel === "Up" && momentum.direction === "DOWN") {
       logger.info(
         {
@@ -259,7 +329,6 @@ export class StrategyEngine extends EventEmitter {
       return true;
     }
 
-    // DOWN outcome but BTC is going UP → skip
     if (outcomeLabel === "Down" && momentum.direction === "UP") {
       logger.info(
         {
@@ -272,14 +341,7 @@ export class StrategyEngine extends EventEmitter {
       return true;
     }
 
-    return false; // Momentum aligns — allow entry
-  }
-
-  private calculateBtcDistanceUsd(
-    currentBtcPrice: number,
-    targetPrice: number,
-  ): number {
-    return Math.abs(currentBtcPrice - targetPrice);
+    return false;
   }
 
   getPriceState(tokenId: string): TokenPriceState | undefined {
