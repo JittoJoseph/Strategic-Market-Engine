@@ -9,7 +9,7 @@ import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import { getDb, wipeAndResetPortfolio, getPortfolio } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, desc, and, sql, gte } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { getMarketOrchestrator } from "./market-orchestrator.js";
 import { getBtcPriceWatcher } from "./btc-price-watcher.js";
 import {
@@ -221,34 +221,17 @@ export class ApiServer {
     this.app.get("/api/markets", async (req, res) => {
       try {
         const db = getDb();
-        const limit = Math.min(parseInt(req.query.limit as string) || 30, 200);
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 200);
         const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
-        const now = new Date();
-        const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+
         const markets = await db
           .select()
           .from(schema.markets)
-          .where(
-            and(
-              eq(schema.markets.active, true),
-              gte(schema.markets.endDate, cutoff),
-            ),
-          )
           .orderBy(desc(schema.markets.endDate))
           .limit(limit)
           .offset(offset);
 
-        const nowMs = now.getTime();
-        const enriched = markets.map((m) => {
-          const endMs = m.endDate ? new Date(m.endDate).getTime() : 0;
-          return {
-            ...m,
-            computedStatus:
-              endMs > nowMs ? ("ACTIVE" as const) : ("ENDED" as const),
-          };
-        });
-
-        res.json(enriched);
+        res.json(markets);
       } catch (error) {
         logger.error({ error }, "Markets list error");
         res.status(500).json({ error: "Failed to get markets" });
