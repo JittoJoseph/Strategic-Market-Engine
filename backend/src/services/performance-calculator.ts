@@ -1,7 +1,7 @@
 import { createModuleLogger } from "../utils/logger.js";
 import { getDb, getPortfolio } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { eq, desc, and, gte, sql } from "drizzle-orm";
+import { eq, desc, and, gte } from "drizzle-orm";
 import Decimal from "decimal.js";
 
 const logger = createModuleLogger("performance-calculator");

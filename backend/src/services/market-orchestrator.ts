@@ -1204,11 +1204,12 @@ export class MarketOrchestrator extends EventEmitter {
         ? calculateWinProfit(pos.entryPrice, pos.entryShares, pos.fees)
         : calculateLossAmount(pos.entryPrice, pos.entryShares, pos.fees);
 
-      // Add cash back: win = 1 × shares (payout), loss = $0
-      if (isWin) {
-        await this.portfolioManager.addCash(pos.entryShares); // shares × $1 payout
+      // CORRECTED: Return original investment + realized PnL
+      // Win: original investment + profit, Loss: original investment + loss
+      const cashReturn = pos.actualCost + pnl;
+      if (cashReturn > 0) {
+        await this.portfolioManager.addCash(cashReturn);
       }
-      // For a loss, no cash comes back
 
       const resolvedTrade = await resolveTrade(
         tradeId,
