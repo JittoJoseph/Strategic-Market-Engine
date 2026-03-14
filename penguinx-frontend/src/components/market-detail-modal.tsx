@@ -236,7 +236,6 @@ export function MarketDetailModal({
                 {isActive ? "ACTIVE" : "ENDED"}
               </span>
               <Chip>{windowLabel}</Chip>
-              <Chip>{market.category.toUpperCase()}</Chip>
             </div>
             <div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-0.5">
               <a
@@ -311,7 +310,7 @@ export function MarketDetailModal({
               <div className="px-4 pb-4 space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-xs font-mono text-muted-foreground">
-                    TOTAL CROSSOVERS: {crossovers.length}
+                    CROSSOVERS: {crossovers.length}
                   </span>
                   {tradeCrossoverCounts.length > 0 && (
                     <span
@@ -321,27 +320,9 @@ export function MarketDetailModal({
                           : "text-green-600"
                       }`}
                     >
-                      CROSSOVERS BEFORE ENTRY: {tradeCrossoverCounts[0].count}
+                      BEFORE ENTRY: {tradeCrossoverCounts[0].count}
                     </span>
                   )}
-                  <div className="flex gap-3">
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 rounded-full bg-green-500/70"></div>
-                      <span className="text-xs text-muted-foreground">UP</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 rounded-full bg-red-500/70"></div>
-                      <span className="text-xs text-muted-foreground">
-                        DOWN
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-px h-4 bg-blue-500/50"></div>
-                      <span className="text-xs text-muted-foreground">
-                        Trade Entry
-                      </span>
-                    </div>
-                  </div>
                 </div>
 
                 <CrossoverTimeline
@@ -407,7 +388,7 @@ export function MarketDetailModal({
                             : "text-red-400"
                         }`}
                       >
-                        ${parseFloat(trade.realizedPnl).toFixed(2)}
+                        ${parseFloat(trade.realizedPnl).toFixed(4)}
                       </span>
                     )}
                   </div>
