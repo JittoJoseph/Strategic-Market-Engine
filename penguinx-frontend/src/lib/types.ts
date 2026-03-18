@@ -131,6 +131,7 @@ export interface SystemStats {
     momentumLookbackMs?: number;
     momentumMinChangeUsd?: number;
     oscillationFilterEnabled?: boolean;
+    oscillationWindowMs?: number;
     oscillationMaxCrossovers?: number;
   };
   portfolio?: {
@@ -335,3 +336,23 @@ export const MARKET_WINDOW_LABELS: Record<MarketWindow, string> = {
   "4H": "BTC 4-HOUR",
   "1D": "BTC 1-DAY",
 };
+
+export const MARKET_WINDOW_DURATION_MS: Record<MarketWindow, number> = {
+  "5M": 5 * 60 * 1000,
+  "15M": 15 * 60 * 1000,
+  "1H": 60 * 60 * 1000,
+  "4H": 4 * 60 * 60 * 1000,
+  "1D": 24 * 60 * 60 * 1000,
+};
+
+/**
+ * Safe duration lookup for API-provided window types.
+ * Falls back to 15 minutes when the window type is missing/unknown.
+ */
+export function getMarketWindowDurationMs(windowType?: string | null): number {
+  if (!windowType) return MARKET_WINDOW_DURATION_MS["15M"];
+  const duration =
+    MARKET_WINDOW_DURATION_MS[windowType as MarketWindow] ??
+    MARKET_WINDOW_DURATION_MS["15M"];
+  return duration;
+}

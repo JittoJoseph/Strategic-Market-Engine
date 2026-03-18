@@ -3,11 +3,17 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
 import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
-import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
+import {
+  MARKET_WINDOW_LABELS,
+  getMarketWindowDurationMs,
+  type MarketWindow,
+} from "@/lib/types";
 
 interface MarketDetailModalProps {
   market: DiscoveredMarket | null;
   trades: SimulatedTrade[];
+  oscillationWindowMs?: number;
+  oscillationMaxCrossovers?: number;
   open: boolean;
   onClose: () => void;
 }
@@ -42,15 +48,19 @@ function CrossoverTimeline({
   // Sort crossovers by timestamp
   const sortedCrossovers = [...crossovers].sort((a, b) => a.ts - b.ts);
 
-  // Generate minute markers
   const minuteMarkers = [];
   const totalMinutes = Math.ceil(duration / (60 * 1000));
-  for (let i = 0; i <= totalMinutes; i++) {
-    const timeMs = marketStart + i * 60 * 1000;
-    if (timeMs <= marketEnd) {
-      const position = ((timeMs - marketStart) / duration) * 100;
-      minuteMarkers.push({ time: timeMs, position });
-    }
+  const maxMarkers = 6;
+  const stepMinutes = Math.max(1, Math.ceil(totalMinutes / (maxMarkers - 1)));
+
+  for (let minute = 0; minute <= totalMinutes; minute += stepMinutes) {
+    const timeMs = Math.min(marketStart + minute * 60 * 1000, marketEnd);
+    const position = ((timeMs - marketStart) / duration) * 100;
+    minuteMarkers.push({ minute, position });
+  }
+
+  if (minuteMarkers[minuteMarkers.length - 1]?.minute !== totalMinutes) {
+    minuteMarkers.push({ minute: totalMinutes, position: 100 });
   }
 
   return (
@@ -108,7 +118,7 @@ function CrossoverTimeline({
             >
               <div className="w-px h-2 bg-border/50"></div>
               <div className="text-[10px] text-muted-foreground/70 mt-0.5 text-center font-mono">
-                {i}
+                {marker.minute}
               </div>
             </div>
           ))}
@@ -196,6 +206,8 @@ function formatTimeAgo(endTime: number): string {
 export function MarketDetailModal({
   market,
   trades,
+  oscillationWindowMs = 60_000,
+  oscillationMaxCrossovers = 3,
   open,
   onClose,
 }: MarketDetailModalProps) {
@@ -208,16 +220,23 @@ export function MarketDetailModal({
   const polyUrl = polymarketMarketUrl(market);
   const crossovers = market.metadata?.crossovers || [];
   const marketTrades = trades.filter((trade) => trade.marketId === market.id);
+  const windowDurationMs = getMarketWindowDurationMs(market.windowType);
+  const marketEndMs = market.endDate
+    ? new Date(market.endDate).getTime()
+    : Date.now();
+  const marketStartMs = marketEndMs - windowDurationMs;
 
   // Calculate crossovers before entry for trades
   const tradeCrossoverCounts = marketTrades.map((trade) => {
     const entryTime = new Date(trade.entryTs).getTime();
-    const windowStart = entryTime - 60 * 1000; // 60 seconds before entry
+    const lookbackStart = entryTime - oscillationWindowMs;
     const count = crossovers.filter(
-      (c) => c.ts >= windowStart && c.ts <= entryTime,
+      (c) => c.ts >= lookbackStart && c.ts <= entryTime,
     ).length;
     return { trade, count };
   });
+
+  const lookbackSeconds = Math.max(1, Math.round(oscillationWindowMs / 1000));
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -315,12 +334,14 @@ export function MarketDetailModal({
                   {tradeCrossoverCounts.length > 0 && (
                     <span
                       className={`text-xs font-mono ${
-                        tradeCrossoverCounts[0].count >= 3
+                        tradeCrossoverCounts[0].count >=
+                        oscillationMaxCrossovers
                           ? "text-red-500"
                           : "text-green-600"
                       }`}
                     >
-                      BEFORE ENTRY: {tradeCrossoverCounts[0].count}
+                      LAST {lookbackSeconds}S: {tradeCrossoverCounts[0].count}/
+                      {oscillationMaxCrossovers}
                     </span>
                   )}
                 </div>
@@ -328,16 +349,8 @@ export function MarketDetailModal({
                 <CrossoverTimeline
                   crossovers={crossovers}
                   trades={marketTrades}
-                  marketStart={
-                    market.endDate
-                      ? new Date(market.endDate).getTime() - 5 * 60 * 1000 // 5 minutes before end
-                      : Date.now() - 24 * 60 * 60 * 1000 // fallback
-                  }
-                  marketEnd={
-                    market.endDate
-                      ? new Date(market.endDate).getTime()
-                      : Date.now()
-                  }
+                  marketStart={marketStartMs}
+                  marketEnd={marketEndMs}
                 />
               </div>
             </Section>

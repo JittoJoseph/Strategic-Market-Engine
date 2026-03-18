@@ -33,7 +33,11 @@ import type {
   LiveMarketPrice,
   ActivityEntry,
 } from "@/lib/types";
-import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
+import {
+  MARKET_WINDOW_LABELS,
+  getMarketWindowDurationMs,
+  type MarketWindow,
+} from "@/lib/types";
 
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("trades");
@@ -432,6 +436,8 @@ export function DashboardPage() {
       <MarketDetailModal
         market={selectedMarket}
         trades={trades}
+        oscillationWindowMs={stats?.config?.oscillationWindowMs ?? 60_000}
+        oscillationMaxCrossovers={stats?.config?.oscillationMaxCrossovers ?? 3}
         open={selectedMarket !== null}
         onClose={() => setSelectedMarket(null)}
       />
@@ -560,16 +566,9 @@ function TopDashboardSection({
       : effectiveBtcAtStart;
 
     const end = new Date(primaryMarket.endDate);
-    const windowMinMap: Record<string, number> = {
-      "5M": 5,
-      "15M": 15,
-      "30M": 30,
-      "1H": 60,
-      "4H": 240,
-      "1D": 1440,
-    };
-    const mins = windowMinMap[windowType] ?? 15;
-    const start = new Date(end.getTime() - mins * 60000);
+    const windowDurationMs = getMarketWindowDurationMs(windowType);
+    const mins = Math.floor(windowDurationMs / 60000);
+    const start = new Date(end.getTime() - windowDurationMs);
     const fmt = (d: Date) =>
       d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 

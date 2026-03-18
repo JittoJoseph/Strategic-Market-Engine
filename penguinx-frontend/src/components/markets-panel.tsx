@@ -100,7 +100,7 @@ export function MarketsPanel({
     const now = Date.now();
     const timeUntilEnd = endTime - now;
 
-    if (timeUntilEnd > 0 && timeUntilEnd < 20 * 60 * 1000) {
+    if (timeUntilEnd > 0) {
       const timer = setTimeout(() => {
         refetch();
       }, timeUntilEnd + 2000);
