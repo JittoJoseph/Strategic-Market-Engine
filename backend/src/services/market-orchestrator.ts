@@ -37,8 +37,6 @@ import { PortfolioManager } from "./portfolio-manager.js";
 import type { MarketResolvedEvent } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
-const STOP_LOSS_HOLDOFF_SECONDS = 60;
-const STOP_LOSS_HOLDOFF_MS = STOP_LOSS_HOLDOFF_SECONDS * 1000;
 
 /** Tracks an active market through its lifecycle */
 interface ActiveMarketState {
@@ -849,7 +847,7 @@ export class MarketOrchestrator extends EventEmitter {
         stopLossEligibleAtMs:
           config.strategy.marketWindow === "5M"
             ? 0
-            : entryTs.getTime() + STOP_LOSS_HOLDOFF_MS,
+            : entryTs.getTime() + config.strategy.stopLossHoldoffSeconds * 1000,
         entryPrice: execution.averagePrice,
         entryShares: execution.totalShares,
         fees: execution.fees,
@@ -1347,7 +1345,9 @@ export class MarketOrchestrator extends EventEmitter {
         tokenId: trade.tokenId ?? "",
         outcomeLabel: trade.outcomeLabel ?? "",
         stopLossEligibleAtMs:
-          windowType === "5M" ? 0 : entryTsMs + STOP_LOSS_HOLDOFF_MS,
+          windowType === "5M"
+            ? 0
+            : entryTsMs + config.strategy.stopLossHoldoffSeconds * 1000,
         entryPrice: parseFloat(trade.entryPrice),
         entryShares: parseFloat(trade.entryShares),
         fees: parseFloat(trade.entryFees ?? "0"),

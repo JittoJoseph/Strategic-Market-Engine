@@ -177,6 +177,7 @@ export class ApiServer {
             minBtcDistanceUsd: config.strategy.minBtcDistanceUsd,
             stopLossEnabled: config.strategy.stopLossEnabled,
             stopLossPriceTrigger: config.strategy.stopLossPriceTrigger,
+            stopLossHoldoffSeconds: config.strategy.stopLossHoldoffSeconds,
             momentumEnabled: config.strategy.momentumEnabled,
             momentumLookbackMs: config.strategy.momentumLookbackMs,
             momentumMinChangeUsd: config.strategy.momentumMinChangeUsd,
