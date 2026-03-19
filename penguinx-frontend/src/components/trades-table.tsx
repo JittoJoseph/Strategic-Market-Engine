@@ -349,7 +349,7 @@ function extractTimeWindow(
   if (endDateStr) {
     const endDate = new Date(endDateStr);
     return {
-      time: `${fmtTime(endDate)}${label ? ` · ${label}` : ""}`,
+      time: fmtTime(endDate),
       date: endDate.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
@@ -360,7 +360,7 @@ function extractTimeWindow(
   // Fallback: show entry time when end date isn't available
   const entryDate = new Date(trade.entryTs);
   return {
-    time: `${fmtTime(entryDate)}${label ? ` · ${label}` : ""}`,
+    time: fmtTime(entryDate),
     date: entryDate.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
