@@ -37,6 +37,8 @@ import { PortfolioManager } from "./portfolio-manager.js";
 import type { MarketResolvedEvent } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
+const STOP_LOSS_HOLDOFF_SECONDS = 60;
+const STOP_LOSS_HOLDOFF_MS = STOP_LOSS_HOLDOFF_SECONDS * 1000;
 
 /** Tracks an active market through its lifecycle */
 interface ActiveMarketState {
@@ -64,6 +66,8 @@ interface OpenPosition {
   marketId: string;
   tokenId: string;
   outcomeLabel: string;
+  /** Timestamp in ms when stop-loss can start triggering (0 = immediately active). */
+  stopLossEligibleAtMs: number;
   entryPrice: number;
   entryShares: number;
   fees: number;
@@ -813,11 +817,13 @@ export class MarketOrchestrator extends EventEmitter {
       // Determine fill status for audit
       const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
 
+      const entryTs = new Date();
       const tradeRow = await createSimulatedTrade({
         marketId: opp.marketId,
         tokenId: opp.tokenId,
         outcomeLabel: opp.outcomeLabel,
-        entryTs: new Date(),
+        entryTs,
+        windowType: config.strategy.marketWindow,
         entryPrice: execution.averagePrice.toFixed(6),
         entryShares: execution.totalShares.toFixed(6),
         positionBudget: positionBudget.toFixed(6),
@@ -840,6 +846,10 @@ export class MarketOrchestrator extends EventEmitter {
         marketId: opp.marketId,
         tokenId: opp.tokenId,
         outcomeLabel: opp.outcomeLabel,
+        stopLossEligibleAtMs:
+          config.strategy.marketWindow === "5M"
+            ? 0
+            : entryTs.getTime() + STOP_LOSS_HOLDOFF_MS,
         entryPrice: execution.averagePrice,
         entryShares: execution.totalShares,
         fees: execution.fees,
@@ -935,10 +945,14 @@ export class MarketOrchestrator extends EventEmitter {
       const pos = this.openPositions.get(tradeId);
       if (!pos) continue;
       if (pos.stopLossTriggered) continue;
-      // 🔑 Critical guard: stop-loss must ONLY fire while the market window is open.
+      // Critical guard: stop-loss must ONLY fire while the market window is open.
       // After endDate, prices drift to ~0.50 during settlement — this would
       // incorrectly trigger stop-loss on winning positions.
       if (pos.marketEndDate.getTime() <= now) continue;
+
+      if (now <= pos.stopLossEligibleAtMs) {
+        continue;
+      }
 
       if (bestBid < config.strategy.stopLossPriceTrigger) {
         pos.stopLossTriggered = true;
@@ -1319,14 +1333,21 @@ export class MarketOrchestrator extends EventEmitter {
    * Load existing open trades from the database on startup (single JOIN query).
    */
   private async loadOpenPositions(): Promise<void> {
+    const config = getConfig();
     const rows = await loadOpenTradesWithMarkets();
 
     for (const { trade, marketEndDate } of rows) {
+      const entryTsMs = trade.entryTs
+        ? new Date(trade.entryTs).getTime()
+        : Date.now();
+      const windowType = trade.windowType ?? config.strategy.marketWindow;
       this.trackPosition({
         tradeId: trade.id,
         marketId: trade.marketId ?? "",
         tokenId: trade.tokenId ?? "",
         outcomeLabel: trade.outcomeLabel ?? "",
+        stopLossEligibleAtMs:
+          windowType === "5M" ? 0 : entryTsMs + STOP_LOSS_HOLDOFF_MS,
         entryPrice: parseFloat(trade.entryPrice),
         entryShares: parseFloat(trade.entryShares),
         fees: parseFloat(trade.entryFees ?? "0"),
