@@ -412,14 +412,6 @@ export function DashboardPage() {
                     accent={stats.config.stopLossEnabled}
                     warn={!stats.config.stopLossEnabled}
                   />
-                  <StatRow
-                    label="Stop Loss Hold Off"
-                    value={
-                      stats?.config?.stopLossEnabled
-                        ? `${stats?.config?.stopLossHoldoffSeconds}s`
-                        : "DISABLED"
-                    }
-                  />
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground font-mono py-4 text-center">

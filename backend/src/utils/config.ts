@@ -46,7 +46,6 @@ export function loadConfig(): Config {
       // Stop-loss: sell if token bid drops below this price WHILE window is still open
       stopLossEnabled: envBool("STOP_LOSS_ENABLED", true),
       stopLossPriceTrigger: envNum("STOP_LOSS_PRICE_TRIGGER", 0.75),
-      stopLossHoldoffSeconds: envNum("STOP_LOSS_HOLDOFF_SECONDS", 40),
       // Momentum filter
       momentumEnabled: envBool("MOMENTUM_ENABLED", true),
       momentumLookbackMs: envNum("MOMENTUM_LOOKBACK_MS", 90_000),

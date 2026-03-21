@@ -64,8 +64,6 @@ interface OpenPosition {
   marketId: string;
   tokenId: string;
   outcomeLabel: string;
-  /** Timestamp in ms when stop-loss can start triggering (0 = immediately active). */
-  stopLossEligibleAtMs: number;
   entryPrice: number;
   entryShares: number;
   fees: number;
@@ -844,10 +842,6 @@ export class MarketOrchestrator extends EventEmitter {
         marketId: opp.marketId,
         tokenId: opp.tokenId,
         outcomeLabel: opp.outcomeLabel,
-        stopLossEligibleAtMs:
-          config.strategy.marketWindow === "5M"
-            ? 0
-            : entryTs.getTime() + config.strategy.stopLossHoldoffSeconds * 1000,
         entryPrice: execution.averagePrice,
         entryShares: execution.totalShares,
         fees: execution.fees,
@@ -947,10 +941,6 @@ export class MarketOrchestrator extends EventEmitter {
       // After endDate, prices drift to ~0.50 during settlement — this would
       // incorrectly trigger stop-loss on winning positions.
       if (pos.marketEndDate.getTime() <= now) continue;
-
-      if (now <= pos.stopLossEligibleAtMs) {
-        continue;
-      }
 
       if (bestBid < config.strategy.stopLossPriceTrigger) {
         pos.stopLossTriggered = true;
@@ -1344,10 +1334,6 @@ export class MarketOrchestrator extends EventEmitter {
         marketId: trade.marketId ?? "",
         tokenId: trade.tokenId ?? "",
         outcomeLabel: trade.outcomeLabel ?? "",
-        stopLossEligibleAtMs:
-          windowType === "5M"
-            ? 0
-            : entryTsMs + config.strategy.stopLossHoldoffSeconds * 1000,
         entryPrice: parseFloat(trade.entryPrice),
         entryShares: parseFloat(trade.entryShares),
         fees: parseFloat(trade.entryFees ?? "0"),

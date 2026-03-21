@@ -127,7 +127,6 @@ export interface SystemStats {
     minBtcDistanceUsd: number;
     stopLossEnabled: boolean;
     stopLossPriceTrigger: number;
-    stopLossHoldoffSeconds: number;
     momentumEnabled?: boolean;
     momentumLookbackMs?: number;
     momentumMinChangeUsd?: number;

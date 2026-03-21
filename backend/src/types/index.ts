@@ -126,7 +126,6 @@ export const ConfigSchema = z.object({
     scanIntervalMs: z.number().min(10000),
     stopLossEnabled: z.boolean(),
     stopLossPriceTrigger: z.number().min(0.01).max(0.95),
-    stopLossHoldoffSeconds: z.number().min(0).max(3600),
     // Momentum filter
     momentumEnabled: z.boolean(),
     momentumLookbackMs: z.number().min(10_000).max(600_000),
