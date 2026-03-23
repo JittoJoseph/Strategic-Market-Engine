@@ -74,6 +74,8 @@ interface OpenPosition {
   minPriceDuringPosition: number;
   /** Prevents concurrent stop-loss execution for the same position */
   stopLossTriggered?: boolean;
+  /** Prevents concurrent take-profit execution for the same position */
+  takeProfitTriggered?: boolean;
 }
 
 /**
@@ -118,6 +120,10 @@ export class MarketOrchestrator extends EventEmitter {
   private running = false;
   private paused = false;
   private cycleCount = 0;
+  private consecutiveLossCount = 0;
+  private pausedByRiskGuard = false;
+  private riskPauseTriggeredAt: number | null = null;
+  private riskAutoResumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super();
@@ -179,6 +185,10 @@ export class MarketOrchestrator extends EventEmitter {
     this.running = false;
     this.scanner.stop();
     this.wsWatcher.stop();
+    if (this.riskAutoResumeTimer) {
+      clearTimeout(this.riskAutoResumeTimer);
+      this.riskAutoResumeTimer = null;
+    }
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
@@ -200,6 +210,10 @@ export class MarketOrchestrator extends EventEmitter {
   pause(): void {
     this.paused = true;
     this.scanner.stop();
+    if (this.riskAutoResumeTimer) {
+      clearTimeout(this.riskAutoResumeTimer);
+      this.riskAutoResumeTimer = null;
+    }
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
@@ -215,6 +229,13 @@ export class MarketOrchestrator extends EventEmitter {
   async resume(): Promise<void> {
     if (!this.paused) return;
     this.paused = false;
+    this.pausedByRiskGuard = false;
+    this.riskPauseTriggeredAt = null;
+    this.consecutiveLossCount = 0;
+    if (this.riskAutoResumeTimer) {
+      clearTimeout(this.riskAutoResumeTimer);
+      this.riskAutoResumeTimer = null;
+    }
 
     // Reload portfolio state in case admin wiped + reset
     await this.portfolioManager.reload();
@@ -254,6 +275,12 @@ export class MarketOrchestrator extends EventEmitter {
       btcPriceAgeMs: this.btcWatcher.getPriceAgeMs(),
       btcPriceFresh: this.btcWatcher.isPriceFresh(),
       momentum,
+      risk: {
+        consecutiveLossCount: this.consecutiveLossCount,
+        consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
+        pausedByRiskGuard: this.pausedByRiskGuard,
+        riskPauseTriggeredAt: this.riskPauseTriggeredAt,
+      },
     };
   }
 
@@ -635,6 +662,7 @@ export class MarketOrchestrator extends EventEmitter {
     );
 
     this.checkStopLoss(tokenId, bestBid);
+    this.checkTakeProfit(tokenId, bestBid);
   }
 
   /**
@@ -962,6 +990,46 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
+  /**
+   * Trigger take-profit for any open position on `tokenId` when best bid reaches
+   * the configured take-profit trigger. Like stop-loss, this is trigger-based:
+   * realized exit is determined by simulated sell against live orderbook depth.
+   */
+  private checkTakeProfit(tokenId: string, bestBid: number): void {
+    const config = getConfig();
+    if (!config.strategy.takeProfitEnabled) return;
+
+    const now = Date.now();
+    const tradeIds = this.positionsByToken.get(tokenId);
+    if (!tradeIds) return;
+
+    for (const tradeId of tradeIds) {
+      const pos = this.openPositions.get(tradeId);
+      if (!pos) continue;
+      if (pos.stopLossTriggered || pos.takeProfitTriggered) continue;
+      // Only fire while market window is open.
+      if (pos.marketEndDate.getTime() <= now) continue;
+
+      if (bestBid >= config.strategy.takeProfitTriggerPrice) {
+        pos.takeProfitTriggered = true;
+        logger.info(
+          {
+            tradeId,
+            tokenId,
+            bestBid: bestBid.toFixed(4),
+            trigger: config.strategy.takeProfitTriggerPrice,
+          },
+          `Take-profit triggered: bid ${bestBid.toFixed(4)} >= ${config.strategy.takeProfitTriggerPrice} trigger`,
+        );
+        this.executeTakeProfit(tradeId, pos, bestBid).catch((err) => {
+          logger.error({ err, tradeId }, "Take-profit execution failed");
+          const position = this.openPositions.get(tradeId);
+          if (position) position.takeProfitTriggered = false;
+        });
+      }
+    }
+  }
+
   private async executeStopLoss(
     tradeId: string,
     pos: OpenPosition,
@@ -1026,7 +1094,9 @@ export class MarketOrchestrator extends EventEmitter {
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         pos.minPriceDuringPosition.toFixed(8),
+        { exitReason: "STOP_LOSS" },
       );
+      this.updateConsecutiveLossState(isWin);
       this.untrackPosition(tradeId);
 
       await logAudit(
@@ -1076,6 +1146,129 @@ export class MarketOrchestrator extends EventEmitter {
       // Reset flag to allow retry on next price tick
       const position = this.openPositions.get(tradeId);
       if (position) position.stopLossTriggered = false;
+    }
+  }
+
+  private async executeTakeProfit(
+    tradeId: string,
+    pos: OpenPosition,
+    triggerBid: number,
+  ): Promise<void> {
+    try {
+      const config = getConfig();
+      const orderbookResult = await this.client.getOrderbook(pos.tokenId);
+
+      let exitPrice: number;
+      let exitFees = 0;
+
+      if (orderbookResult?.data && orderbookResult.data.bids?.length > 0) {
+        // Simulate a market sell once trigger is hit, for realistic execution.
+        const sellResult = simulateLimitSell(
+          orderbookResult.data,
+          pos.entryShares,
+          0, // accept any bid
+        );
+
+        exitPrice =
+          sellResult.totalSharesSold > 0 ? sellResult.averagePrice : triggerBid;
+        exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
+
+        if (sellResult.isPartialFill) {
+          logger.warn(
+            {
+              tradeId,
+              sold: sellResult.totalSharesSold,
+              total: pos.entryShares,
+            },
+            "Take-profit partial fill — insufficient bid liquidity",
+          );
+        }
+      } else {
+        exitPrice = triggerBid;
+      }
+
+      const pnl = calculateEarlyExitPnl(
+        pos.entryPrice,
+        exitPrice,
+        pos.entryShares,
+        pos.fees,
+        exitFees,
+      );
+
+      const isWin = pnl > 0;
+      const outcome = isWin ? "WIN" : "LOSS";
+      const sellProceeds = pos.entryShares * exitPrice - exitFees;
+      if (sellProceeds > 0) {
+        await this.portfolioManager.addCash(sellProceeds);
+      }
+
+      await resolveTrade(
+        tradeId,
+        outcome,
+        pnl.toFixed(6),
+        exitPrice.toFixed(6),
+        pos.minPriceDuringPosition.toFixed(8),
+        {
+          exitReason: "TAKE_PROFIT",
+          takeProfitTriggerPrice:
+            config.strategy.takeProfitTriggerPrice.toFixed(6),
+          takeProfitTriggeredAt: new Date(),
+          takeProfitExitPrice: exitPrice.toFixed(6),
+          takeProfitFees: exitFees.toFixed(6),
+          takeProfitPnl: pnl.toFixed(6),
+        },
+      );
+      this.updateConsecutiveLossState(isWin);
+      this.untrackPosition(tradeId);
+
+      await logAudit(
+        "info",
+        "TAKE_PROFIT",
+        `Take-profit executed for trade ${tradeId}: trigger ${config.strategy.takeProfitTriggerPrice.toFixed(4)} (bid ${triggerBid.toFixed(4)}) → exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
+        {
+          tradeId,
+          tokenId: pos.tokenId,
+          entryPrice: pos.entryPrice,
+          triggerBid,
+          triggerPrice: config.strategy.takeProfitTriggerPrice,
+          exitPrice,
+          exitFees,
+          pnl,
+          outcome,
+        },
+      );
+
+      logger.info(
+        {
+          tradeId,
+          marketId: pos.marketId,
+          outcome: pos.outcomeLabel,
+          entryPrice: pos.entryPrice.toFixed(4),
+          exitPrice: exitPrice.toFixed(4),
+          pnl: pnl.toFixed(4),
+          triggerBid: triggerBid.toFixed(4),
+          triggerPrice: config.strategy.takeProfitTriggerPrice.toFixed(4),
+          classification: outcome,
+        },
+        "🎯 Take-profit sell executed",
+      );
+
+      this.emit("tradeResolved", {
+        tradeId,
+        isWin,
+        pnl,
+        exitPrice,
+        trade: null,
+      });
+    } catch (error) {
+      logger.error({ error, tradeId }, "Take-profit execution error");
+      logAudit(
+        "error",
+        "SYSTEM",
+        `Take-profit execution error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
+      ).catch(() => {});
+      const position = this.openPositions.get(tradeId);
+      if (position) position.takeProfitTriggered = false;
     }
   }
 
@@ -1219,7 +1412,10 @@ export class MarketOrchestrator extends EventEmitter {
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         pos.minPriceDuringPosition.toFixed(8),
+        { exitReason: "RESOLUTION" },
       );
+
+      this.updateConsecutiveLossState(isWin);
 
       await logAudit(
         "info",
@@ -1292,7 +1488,9 @@ export class MarketOrchestrator extends EventEmitter {
         pnl.toFixed(6),
         "0",
         pos.minPriceDuringPosition.toFixed(8),
+        { exitReason: "FORCE_TIMEOUT" },
       );
+      this.updateConsecutiveLossState(false);
       this.untrackPosition(tradeId);
 
       await logAudit(
@@ -1318,6 +1516,67 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   /**
+   * Track consecutive loss streak and apply configured risk guardrails.
+   */
+  private updateConsecutiveLossState(isWin: boolean): void {
+    const config = getConfig();
+    const limit = config.strategy.consecutiveLossPauseLimit;
+    if (limit <= 0) return;
+
+    if (isWin) {
+      this.consecutiveLossCount = 0;
+      return;
+    }
+
+    this.consecutiveLossCount++;
+
+    if (this.consecutiveLossCount < limit) return;
+    if (this.paused) return;
+
+    this.pausedByRiskGuard = true;
+    this.riskPauseTriggeredAt = Date.now();
+    this.pause();
+
+    logAudit(
+      "error",
+      "RISK_GUARD",
+      `Auto-paused after ${this.consecutiveLossCount} consecutive losses`,
+      {
+        consecutiveLossCount: this.consecutiveLossCount,
+        pauseLimit: limit,
+        cashBalance: this.portfolioManager.getCashBalance(),
+      },
+    ).catch(() => {});
+
+    logger.error(
+      {
+        consecutiveLossCount: this.consecutiveLossCount,
+        pauseLimit: limit,
+      },
+      "🛑 Risk guard triggered — system auto-paused",
+    );
+
+    if (config.strategy.riskAutoResumeEnabled) {
+      if (this.riskAutoResumeTimer) {
+        clearTimeout(this.riskAutoResumeTimer);
+      }
+      this.riskAutoResumeTimer = setTimeout(() => {
+        this.resume()
+          .then(() => {
+            this.consecutiveLossCount = 0;
+            this.pausedByRiskGuard = false;
+            this.riskPauseTriggeredAt = null;
+            this.riskAutoResumeTimer = null;
+            logger.warn("Risk guard auto-resume executed");
+          })
+          .catch((err) =>
+            logger.error({ err }, "Risk guard auto-resume failed"),
+          );
+      }, config.strategy.riskAutoResumeCooldownMs);
+    }
+  }
+
+  /**
    * Load existing open trades from the database on startup (single JOIN query).
    */
   private async loadOpenPositions(): Promise<void> {
@@ -1328,7 +1587,6 @@ export class MarketOrchestrator extends EventEmitter {
       const entryTsMs = trade.entryTs
         ? new Date(trade.entryTs).getTime()
         : Date.now();
-      const windowType = trade.windowType ?? config.strategy.marketWindow;
       this.trackPosition({
         tradeId: trade.id,
         marketId: trade.marketId ?? "",
@@ -1346,6 +1604,8 @@ export class MarketOrchestrator extends EventEmitter {
             ? trade.minPriceDuringPosition
             : trade.entryPrice,
         ),
+        stopLossTriggered: false,
+        takeProfitTriggered: false,
       });
 
       // Set up resolution monitoring for existing positions

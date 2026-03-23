@@ -173,6 +173,14 @@ export async function resolveTrade(
   realizedPnl: string,
   exitPrice?: string,
   minPriceDuringPosition?: string,
+  extras?: {
+    exitReason?: "RESOLUTION" | "STOP_LOSS" | "TAKE_PROFIT" | "FORCE_TIMEOUT";
+    takeProfitTriggerPrice?: string;
+    takeProfitTriggeredAt?: Date;
+    takeProfitExitPrice?: string;
+    takeProfitFees?: string;
+    takeProfitPnl?: string;
+  },
 ) {
   const database = getDb();
   const finalExitPrice = exitPrice ?? (outcome === "WIN" ? "1" : "0");
@@ -187,6 +195,18 @@ export async function resolveTrade(
       status: "SETTLED",
       updatedAt: new Date(),
       ...(minPriceDuringPosition != null ? { minPriceDuringPosition } : {}),
+      ...(extras?.exitReason ? { exitReason: extras.exitReason } : {}),
+      ...(extras?.takeProfitTriggerPrice
+        ? { takeProfitTriggerPrice: extras.takeProfitTriggerPrice }
+        : {}),
+      ...(extras?.takeProfitTriggeredAt
+        ? { takeProfitTriggeredAt: extras.takeProfitTriggeredAt }
+        : {}),
+      ...(extras?.takeProfitExitPrice
+        ? { takeProfitExitPrice: extras.takeProfitExitPrice }
+        : {}),
+      ...(extras?.takeProfitFees ? { takeProfitFees: extras.takeProfitFees } : {}),
+      ...(extras?.takeProfitPnl ? { takeProfitPnl: extras.takeProfitPnl } : {}),
     })
     .where(eq(schema.simulatedTrades.id, id))
     .returning();

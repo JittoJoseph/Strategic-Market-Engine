@@ -65,7 +65,7 @@ export function TradeDetailPopup({
     `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   /* ─── Badge colour helpers ─── */
-  // exitOutcome is "WIN" or "LOSS" (STOP_LOSS is logged in audit, not stored in trade)
+  const exitReason = trade.exitReason;
   const statusBadgeCls = !isClosed
     ? "text-blue-400 border-blue-400/25 bg-blue-400/5"
     : isWin
@@ -340,6 +340,14 @@ export function TradeDetailPopup({
               >
                 {outcome}
               </span>
+              {exitReason && (
+                <>
+                  <span className="text-muted-foreground/20">·</span>
+                  <span className="text-[11px] font-mono tracking-wider text-muted-foreground/70">
+                    {exitReason}
+                  </span>
+                </>
+              )}
             </div>
           )}
 

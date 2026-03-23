@@ -34,7 +34,14 @@ export interface SimulatedTrade {
   exitPrice: string | null;
   exitTs: string | null;
   exitOutcome: string | null;
+  /** RESOLUTION | STOP_LOSS | TAKE_PROFIT | FORCE_TIMEOUT */
+  exitReason: string | null;
   realizedPnl: string | null;
+  takeProfitTriggerPrice?: string | null;
+  takeProfitTriggeredAt?: string | null;
+  takeProfitExitPrice?: string | null;
+  takeProfitFees?: string | null;
+  takeProfitPnl?: string | null;
   status: string;
   orderbookSnapshot: unknown;
   raw: unknown;
@@ -127,12 +134,17 @@ export interface SystemStats {
     minBtcDistanceUsd: number;
     stopLossEnabled: boolean;
     stopLossPriceTrigger: number;
+    takeProfitEnabled?: boolean;
+    takeProfitTriggerPrice?: number;
     momentumEnabled?: boolean;
     momentumLookbackMs?: number;
     momentumMinChangeUsd?: number;
     oscillationFilterEnabled?: boolean;
     oscillationWindowMs?: number;
     oscillationMaxCrossovers?: number;
+    consecutiveLossPauseLimit?: number;
+    riskAutoResumeEnabled?: boolean;
+    riskAutoResumeCooldownMs?: number;
   };
   portfolio?: {
     cashBalance: number;

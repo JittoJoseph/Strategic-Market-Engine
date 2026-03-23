@@ -285,7 +285,9 @@ export function TradesTable({
                           : "bg-muted/40 text-muted-foreground"
                       }`}
                     >
-                      {trade.exitOutcome || "SETTLED"}
+                      {trade.exitReason
+                        ? `${trade.exitOutcome || "SETTLED"} · ${trade.exitReason}`
+                        : (trade.exitOutcome || "SETTLED")}
                     </span>
                   ) : isPending ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">

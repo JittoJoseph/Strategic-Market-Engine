@@ -99,12 +99,25 @@ export const simulatedTrades = pgTable(
     exitPrice: decimal("exit_price", { precision: 18, scale: 8 }),
     exitTs: timestamp("exit_ts"),
     exitOutcome: text("exit_outcome"), // WIN | LOSS
+    exitReason: text("exit_reason"), // RESOLUTION | STOP_LOSS | TAKE_PROFIT | FORCE_TIMEOUT
     realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }),
     /** Lowest bestBid observed while position was open (until window close) */
     minPriceDuringPosition: decimal("min_price_during_position", {
       precision: 18,
       scale: 8,
     }),
+    // Take-profit details (when early exit is TP-triggered)
+    takeProfitTriggerPrice: decimal("take_profit_trigger_price", {
+      precision: 18,
+      scale: 8,
+    }),
+    takeProfitTriggeredAt: timestamp("take_profit_triggered_at"),
+    takeProfitExitPrice: decimal("take_profit_exit_price", {
+      precision: 18,
+      scale: 8,
+    }),
+    takeProfitFees: decimal("take_profit_fees", { precision: 18, scale: 8 }),
+    takeProfitPnl: decimal("take_profit_pnl", { precision: 18, scale: 8 }),
     // Status
     status: text("status").default("OPEN").notNull(),
     orderbookSnapshot: jsonb("orderbook_snapshot"),

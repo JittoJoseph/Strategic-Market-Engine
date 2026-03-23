@@ -126,6 +126,9 @@ export const ConfigSchema = z.object({
     scanIntervalMs: z.number().min(10000),
     stopLossEnabled: z.boolean(),
     stopLossPriceTrigger: z.number().min(0.01).max(0.95),
+    // Take-profit (absolute trigger price). Trigger only; realized exit uses live orderbook.
+    takeProfitEnabled: z.boolean(),
+    takeProfitTriggerPrice: z.number().min(0.01).max(0.99),
     // Momentum filter
     momentumEnabled: z.boolean(),
     momentumLookbackMs: z.number().min(10_000).max(600_000),
@@ -134,6 +137,10 @@ export const ConfigSchema = z.object({
     oscillationFilterEnabled: z.boolean(),
     oscillationWindowMs: z.number().min(10_000).max(300_000),
     oscillationMaxCrossovers: z.number().min(1).max(20),
+    // Drawdown guardrails
+    consecutiveLossPauseLimit: z.number().min(0).max(20),
+    riskAutoResumeEnabled: z.boolean(),
+    riskAutoResumeCooldownMs: z.number().min(10_000).max(24 * 60 * 60 * 1000),
   }),
   admin: z.object({
     password: z.string().min(1),
