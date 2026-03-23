@@ -406,11 +406,43 @@ export function DashboardPage() {
                     label="Stop Loss"
                     value={
                       stats.config.stopLossEnabled
-                        ? `${((stats.config as any).stopLossPriceTrigger * 100).toFixed(0)}¢ trigger`
+                        ? `${(stats.config.stopLossPriceTrigger * 100).toFixed(0)}¢ trigger`
                         : "DISABLED"
                     }
                     accent={stats.config.stopLossEnabled}
                     warn={!stats.config.stopLossEnabled}
+                  />
+                  <StatRow
+                    label="Take Profit"
+                    value={
+                      stats.config.takeProfitEnabled
+                        ? stats.config.takeProfitTriggerPrice != null
+                          ? `${(stats.config.takeProfitTriggerPrice * 100).toFixed(0)}¢ trigger`
+                          : "ENABLED"
+                        : "DISABLED"
+                    }
+                    accent={!!stats.config.takeProfitEnabled}
+                    warn={!stats.config.takeProfitEnabled}
+                  />
+                  <StatRow
+                    label="Risk Guard"
+                    value={
+                      (stats.config.consecutiveLossPauseLimit ?? 0) > 0
+                        ? `${stats.config.consecutiveLossPauseLimit} losses`
+                        : "DISABLED"
+                    }
+                    accent={(stats.config.consecutiveLossPauseLimit ?? 0) > 0}
+                    warn={(stats.config.consecutiveLossPauseLimit ?? 0) <= 0}
+                  />
+                  <StatRow
+                    label="Auto Resume"
+                    value={
+                      stats.config.riskAutoResumeEnabled
+                        ? `${Math.round((stats.config.riskAutoResumeCooldownMs ?? 0) / 60000)}m cooldown`
+                        : "MANUAL"
+                    }
+                    accent={!!stats.config.riskAutoResumeEnabled}
+                    warn={!stats.config.riskAutoResumeEnabled}
                   />
                 </div>
               ) : (
