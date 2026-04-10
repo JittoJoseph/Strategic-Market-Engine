@@ -136,11 +136,24 @@ export class PolymarketClient {
   async getMarketById(marketId: string): Promise<GammaMarket | null> {
     return withRetry(
       async () => {
-        const response = await this.gammaApi.get("/markets", {
-          params: { id: marketId },
-        });
-        const markets = z.array(GammaMarketSchema).parse(response.data);
-        return markets[0] ?? null;
+        // Gamma currently serves single-market lookup at /markets/{id}.
+        // Keep a query-param fallback for compatibility if API behavior changes.
+        try {
+          const response = await this.gammaApi.get(
+            `/markets/${encodeURIComponent(marketId)}`,
+          );
+          return GammaMarketSchema.parse(response.data);
+        } catch (error) {
+          logger.warn(
+            { marketId, error },
+            "Primary market-by-id endpoint failed, trying fallback query",
+          );
+          const fallback = await this.gammaApi.get("/markets", {
+            params: { id: marketId },
+          });
+          const markets = z.array(GammaMarketSchema).parse(fallback.data);
+          return markets[0] ?? null;
+        }
       },
       { maxRetries: 3, retryOn: isRateLimitError },
     );
