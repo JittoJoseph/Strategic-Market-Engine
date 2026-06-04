@@ -20,9 +20,3 @@ End-of-window micro-profit trading on BTC-correlated markets. Monitors BTC price
 - Automated market scanning and opportunity detection
 - Simulated trading execution with position management
 - Live dashboard with portfolio tracking and P&L visualization
-
-## Access
-
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:4000
-- Database Studio: `npm run db:studio`
