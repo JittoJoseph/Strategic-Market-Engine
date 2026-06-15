@@ -164,11 +164,9 @@ export async function resolveTrade(
   maxUnrealizedLoss?: string,
   extras?: {
     exitReason?: "RESOLUTION" | "STOP_LOSS" | "TAKE_PROFIT" | "FORCE_TIMEOUT";
+    exitFees?: string;
     takeProfitTriggerPrice?: string;
     takeProfitTriggeredAt?: Date;
-    takeProfitExitPrice?: string;
-    takeProfitFees?: string;
-    takeProfitPnl?: string;
   },
 ) {
   const database = getDb();
@@ -186,18 +184,10 @@ export async function resolveTrade(
       ...(minPriceDuringPosition != null ? { minPriceDuringPosition } : {}),
       ...(maxUnrealizedProfit != null ? { maxUnrealizedProfit } : {}),
       ...(maxUnrealizedLoss != null ? { maxUnrealizedLoss } : {}),
-      ...(extras?.exitReason ? { exitReason: extras.exitReason } : {}),
-      ...(extras?.takeProfitTriggerPrice
-        ? { takeProfitTriggerPrice: extras.takeProfitTriggerPrice }
-        : {}),
-      ...(extras?.takeProfitTriggeredAt
-        ? { takeProfitTriggeredAt: extras.takeProfitTriggeredAt }
-        : {}),
-      ...(extras?.takeProfitExitPrice
-        ? { takeProfitExitPrice: extras.takeProfitExitPrice }
-        : {}),
-      ...(extras?.takeProfitFees ? { takeProfitFees: extras.takeProfitFees } : {}),
-      ...(extras?.takeProfitPnl ? { takeProfitPnl: extras.takeProfitPnl } : {}),
+      exitReason: extras?.exitReason || null,
+      exitFees: extras?.exitFees || "0",
+      takeProfitTriggerPrice: extras?.takeProfitTriggerPrice || null,
+      takeProfitTriggeredAt: extras?.takeProfitTriggeredAt || null,
     })
     .where(eq(schema.simulatedTrades.id, id))
     .returning();

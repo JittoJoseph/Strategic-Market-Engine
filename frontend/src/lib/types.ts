@@ -34,9 +34,7 @@ export interface SimulatedTrade {
   realizedPnl: string | null;
   takeProfitTriggerPrice?: string | null;
   takeProfitTriggeredAt?: string | null;
-  takeProfitExitPrice?: string | null;
-  takeProfitFees?: string | null;
-  takeProfitPnl?: string | null;
+  exitFees?: string | null;
   status: string;
   createdAt: string;
   updatedAt: string;

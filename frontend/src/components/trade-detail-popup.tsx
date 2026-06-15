@@ -26,6 +26,8 @@ export function TradeDetailPopup({
   const isClosed = trade.status === "SETTLED";
   const entryPrice = parseFloat(trade.entryPrice);
   const entryFees = parseFloat(trade.entryFees || "0");
+  const exitFees = parseFloat(trade.exitFees || "0");
+  const totalFees = entryFees + exitFees;
   const pnl = parseFloat(trade.realizedPnl || "0");
   const exitPrice = trade.exitPrice ? parseFloat(trade.exitPrice) : null;
   const btcAtEntry = trade.btcPriceAtEntry
@@ -48,6 +50,8 @@ export function TradeDetailPopup({
 
   const outcome = trade.exitOutcome;
   const isWin = outcome === "WIN";
+
+  const grossPnl = exitPrice !== null ? (exitPrice - entryPrice) * shares : 0;
 
   const polyUrl =
     (marketSlug ?? trade.marketSlug)
@@ -132,7 +136,7 @@ export function TradeDetailPopup({
             className={`shrink-0 flex items-center justify-between gap-4 px-4 py-2.5 border-b border-border/20 ${pnl >= 0 ? "bg-emerald-500/[0.035]" : "bg-red-500/[0.035]"}`}
           >
             <div className="flex items-baseline gap-2">
-              <Label>P&L</Label>
+              <Label>NET P&L</Label>
               <span
                 className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnlColor(pnl)}`}
               >
@@ -185,7 +189,28 @@ export function TradeDetailPopup({
               />
               <Cell label="BUDGET" value={`$${budget.toFixed(4)}`} />
               <Cell label="ACTUAL COST" value={`$${actualCost.toFixed(4)}`} />
-              <Cell label="ENTRY FEES" value={`$${entryFees.toFixed(6)}`} />
+              
+              {/* Fee and Gross Breakdown */}
+              <div className="col-span-2 flex flex-col gap-1.5 py-2 px-4 border-t border-border/10 bg-muted/20">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">ENTRY FEES</span>
+                  <span className="text-[12px] tabular-nums text-foreground/80">${entryFees.toFixed(6)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">EXIT FEES</span>
+                  <span className="text-[12px] tabular-nums text-foreground/80">${exitFees.toFixed(6)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">TOTAL FEES</span>
+                  <span className="text-[12px] tabular-nums text-foreground/80">${totalFees.toFixed(6)}</span>
+                </div>
+                {isClosed && (
+                  <div className="flex justify-between items-center border-t border-border/10 mt-1 pt-1.5">
+                    <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">GROSS P&L</span>
+                    <span className={`text-[12px] tabular-nums ${pnlColor(grossPnl)}`}>{formatPnl(grossPnl)}</span>
+                  </div>
+                )}
+              </div>
               <Cell
                 label="FILL STATUS"
                 value={

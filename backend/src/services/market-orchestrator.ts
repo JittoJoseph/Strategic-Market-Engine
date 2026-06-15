@@ -1009,7 +1009,10 @@ export class MarketOrchestrator extends EventEmitter {
         pos.minPriceDuringPosition.toFixed(8),
         maxUnrealizedProfit.toFixed(6),
         maxUnrealizedLoss.toFixed(6),
-        { exitReason: "STOP_LOSS" },
+        {
+          exitReason: "STOP_LOSS",
+          exitFees: exitFees.toFixed(6),
+        },
       );
       this.updateConsecutiveLossState(isWin);
       this.untrackPosition(tradeId);
@@ -1137,11 +1140,9 @@ export class MarketOrchestrator extends EventEmitter {
         maxUnrealizedLoss.toFixed(6),
         {
           exitReason: "TAKE_PROFIT",
+          exitFees: exitFees.toFixed(6),
           takeProfitTriggerPrice: takeProfitTriggerPrice.toFixed(6),
           takeProfitTriggeredAt: new Date(),
-          takeProfitExitPrice: exitPrice.toFixed(6),
-          takeProfitFees: exitFees.toFixed(6),
-          takeProfitPnl: pnl.toFixed(6),
         },
       );
       this.updateConsecutiveLossState(isWin);

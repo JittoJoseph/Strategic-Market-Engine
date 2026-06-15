@@ -103,12 +103,9 @@ export const simulatedTrades = pgTable(
       scale: 8,
     }),
     takeProfitTriggeredAt: timestamp("take_profit_triggered_at"),
-    takeProfitExitPrice: decimal("take_profit_exit_price", {
-      precision: 18,
-      scale: 8,
-    }),
-    takeProfitFees: decimal("take_profit_fees", { precision: 18, scale: 8 }),
-    takeProfitPnl: decimal("take_profit_pnl", { precision: 18, scale: 8 }),
+    
+    // Generic exit fees (applies to TP and SL)
+    exitFees: decimal("exit_fees", { precision: 18, scale: 8 }).default("0"),
     // Status
     status: text("status").default("OPEN").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
