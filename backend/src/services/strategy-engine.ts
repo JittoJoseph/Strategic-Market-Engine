@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
+import { WINDOW_CONFIGS } from "../types/index.js";
 import type { BtcPriceData } from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("strategy-engine");
@@ -16,6 +17,7 @@ export interface MarketOpportunity {
   btcPrice: number | null; // For passive telemetry
 
   secondsToEnd: number;
+  secondsFromStart: number;
   trigger: string;
 }
 
@@ -103,12 +105,18 @@ export class StrategyEngine extends EventEmitter {
     if (this.evaluatedTokens.has(tokenId)) return;
 
     const config = getConfig();
+    const windowConfig = WINDOW_CONFIGS[config.strategy.marketWindow];
+    const windowDurationSeconds = windowConfig.durationMs / 1000;
+
     const secondsToEnd = (market.endDate.getTime() - Date.now()) / 1000;
+    const secondsFromStart = windowDurationSeconds - secondsToEnd;
 
     // Trigger only when the market window is actively open
+    // and we are within the first `tradeFromWindowSeconds` of the window start
     if (
       secondsToEnd < 0 ||
-      secondsToEnd > config.strategy.tradeFromWindowSeconds
+      secondsFromStart < 0 ||
+      secondsFromStart > config.strategy.tradeFromWindowSeconds
     ) {
       return;
     }
@@ -138,6 +146,7 @@ export class StrategyEngine extends EventEmitter {
       bestBid,
       btcPrice: btcPriceData?.price ?? null, // passive telemetry
       secondsToEnd,
+      secondsFromStart,
       trigger: "window_open_oscillation",
     };
 
@@ -150,6 +159,7 @@ export class StrategyEngine extends EventEmitter {
         outcome: market.outcomeLabel,
         midpoint: midpoint.toFixed(4),
         bestAsk: bestAsk.toFixed(4),
+        secondsFromStart: secondsFromStart.toFixed(1),
         secondsToEnd: secondsToEnd.toFixed(1),
       },
       "Opportunity detected (Market Window Open)",
