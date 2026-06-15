@@ -31,11 +31,11 @@ export function TradeDetailPopup({
   const btcAtEntry = trade.btcPriceAtEntry
     ? parseFloat(trade.btcPriceAtEntry)
     : null;
-  const btcTarget = trade.btcTargetPrice
-    ? parseFloat(trade.btcTargetPrice)
+  const maxProfit = trade.maxUnrealizedProfit
+    ? parseFloat(trade.maxUnrealizedProfit)
     : null;
-  const btcDist = trade.btcDistanceUsd
-    ? parseFloat(trade.btcDistanceUsd)
+  const maxLoss = trade.maxUnrealizedLoss
+    ? parseFloat(trade.maxUnrealizedLoss)
     : null;
   const minPrice = trade.minPriceDuringPosition
     ? parseFloat(trade.minPriceDuringPosition)
@@ -44,10 +44,7 @@ export function TradeDetailPopup({
   const budget = parseFloat(trade.positionBudget);
   const actualCost = parseFloat(trade.actualCost);
 
-  const windowLabel = trade.windowType
-    ? (MARKET_WINDOW_LABELS[trade.windowType as MarketWindow] ??
-      trade.windowType)
-    : null;
+
 
   const outcome = trade.exitOutcome;
   const isWin = outcome === "WIN";
@@ -91,10 +88,7 @@ export function TradeDetailPopup({
               >
                 {isClosed ? (outcome ?? "SETTLED") : "OPEN"}
               </span>
-              {windowLabel && <Chip>{windowLabel}</Chip>}
-              {trade.marketCategory && (
-                <Chip>{trade.marketCategory.toUpperCase()}</Chip>
-              )}
+
               {trade.outcomeLabel && <Chip>{trade.outcomeLabel}</Chip>}
             </div>
 
@@ -225,99 +219,23 @@ export function TradeDetailPopup({
             </Row2>
           </Section>
 
-          {/* ── BTC CONTEXT ── */}
-          {(btcAtEntry !== null ||
-            (btcTarget !== null && btcTarget > 0) ||
-            (btcDist !== null && btcDist > 0) ||
-            trade.momentumDirection ||
-            trade.crossovers) && (
-            <Section title="BTC CONTEXT">
+          {/* ── MARKET CONTEXT ── */}
+          {(btcAtEntry !== null || maxProfit !== null || maxLoss !== null) && (
+            <Section title="MARKET CONTEXT">
               <Row2>
                 {btcAtEntry !== null && (
-                  <Cell label="AT ENTRY" value={fmtBtc(btcAtEntry)} />
+                  <Cell label="BTC AT ENTRY" value={fmtBtc(btcAtEntry)} />
                 )}
-                {btcTarget !== null && btcTarget > 0 && (
-                  <Cell label="TARGET" value={fmtBtc(btcTarget)} />
-                )}
-                {btcDist !== null && btcDist > 0 && (
-                  <Cell label="DISTANCE" value={`$${btcDist.toFixed(2)}`} />
-                )}
-                {trade.momentumDirection && (
-                  <Cell
-                    label="MOMENTUM"
-                    value={
-                      <span
-                        className={
-                          trade.momentumDirection === "UP"
-                            ? "text-emerald-400"
-                            : trade.momentumDirection === "DOWN"
-                              ? "text-red-400"
-                              : "text-foreground/60"
-                        }
-                      >
-                        {trade.momentumDirection}
-                        {trade.momentumChangeUsd && (
-                          <span className="text-muted-foreground/40 ml-2 font-mono">
-                            $
-                            {Math.abs(
-                              parseFloat(trade.momentumChangeUsd),
-                            ).toFixed(0)}
-                          </span>
-                        )}
-                      </span>
-                    }
+                {maxProfit !== null && (
+                  <Cell 
+                    label="MAX UNREALIZED PNL" 
+                    value={<span className="text-emerald-400">+{formatPnl(maxProfit)}</span>} 
                   />
                 )}
-                {trade.crossovers && (
-                  <Cell
-                    label="WINDOW CROSSOVERS"
-                    value={
-                      <span
-                        className="cursor-help"
-                        title={
-                          trade.crossovers.details.length > 0
-                            ? trade.crossovers.details
-                                .map(
-                                  (c) =>
-                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                                )
-                                .join(" | ")
-                            : "None"
-                        }
-                      >
-                        {trade.crossovers.all}
-                      </span>
-                    }
-                  />
-                )}
-                {trade.crossovers && (
-                  <Cell
-                    label="CROSSOVERS BEFORE ENTRY"
-                    value={
-                      <span
-                        className="cursor-help"
-                        title={
-                          trade.crossovers.details.filter(
-                            (c) =>
-                              c.ts >= new Date(trade.entryTs).getTime() - 60000,
-                          ).length > 0
-                            ? trade.crossovers.details
-                                .filter(
-                                  (c) =>
-                                    c.ts >=
-                                    new Date(trade.entryTs).getTime() - 60000,
-                                )
-                                .map(
-                                  (c) =>
-                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                                )
-                                .join(" | ")
-                            : "None"
-                        }
-                      >
-                        {trade.crossovers.last60s}
-                      </span>
-                    }
+                {maxLoss !== null && (
+                  <Cell 
+                    label="MAX UNREALIZED LOSS" 
+                    value={<span className="text-red-400">{formatPnl(maxLoss)}</span>} 
                   />
                 )}
               </Row2>

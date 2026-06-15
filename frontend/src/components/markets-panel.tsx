@@ -134,18 +134,13 @@ export function MarketsPanel({
         <thead>
           <tr className="border-b border-border/30 text-muted-foreground">
             <th className="text-left py-2 px-2 font-medium">TIME</th>
-            <th className="text-left py-2 px-2 font-medium">WINDOW</th>
             <th className="text-left py-2 px-2 font-medium">STATUS</th>
             <th className="text-center py-2 px-2 font-medium">TRADE</th>
-            <th className="text-right py-2 px-2 font-medium">CROSSOVERS</th>
             <th className="text-right py-2 px-2 font-medium">TIME LEFT</th>
           </tr>
         </thead>
         <tbody>
           {markets.map((market) => {
-            const label =
-              MARKET_WINDOW_LABELS[market.windowType as MarketWindow] ??
-              market.windowType;
             const href = polymarketMarketUrl(market);
 
             // Compute status from API's computedStatus field, fallback to
@@ -177,9 +172,7 @@ export function MarketsPanel({
                     {timeRange}
                   </span>
                 </td>
-                <td className="py-2.5 px-2">
-                  <span className="text-muted-foreground">{label}</span>
-                </td>
+
                 <td className="py-2.5 px-2">
                   {isActive ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -212,9 +205,7 @@ export function MarketsPanel({
                     </span>
                   )}
                 </td>
-                <td className="py-2.5 px-2 text-right tabular-nums text-foreground">
-                  {market.metadata?.crossovers?.length || 0}
-                </td>
+
                 <td className="py-2.5 px-2 text-right tabular-nums text-muted-foreground">
                   {market.endDate ? (
                     isActive ? (

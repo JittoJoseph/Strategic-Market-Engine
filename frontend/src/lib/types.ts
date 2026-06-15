@@ -10,8 +10,6 @@ export interface SimulatedTrade {
   id: string;
   marketId: string | null;
   tokenId: string | null;
-  marketCategory: string | null;
-  windowType: string | null;
   side: string;
   outcomeLabel: string | null;
   orderType: string;
@@ -26,11 +24,8 @@ export interface SimulatedTrade {
   fillStatus: string | null;
   btcPriceAtEntry: string | null;
   btcTargetPrice: string | null;
-  btcDistanceUsd: string | null;
-  /** BTC momentum direction at entry */
-  momentumDirection: string | null;
-  /** BTC momentum change in USD at entry */
-  momentumChangeUsd: string | null;
+  maxUnrealizedProfit: string | null;
+  maxUnrealizedLoss: string | null;
   exitPrice: string | null;
   exitTs: string | null;
   exitOutcome: string | null;
@@ -43,8 +38,6 @@ export interface SimulatedTrade {
   takeProfitFees?: string | null;
   takeProfitPnl?: string | null;
   status: string;
-  orderbookSnapshot: unknown;
-  raw: unknown;
   createdAt: string;
   updatedAt: string;
   /** Market end date (ISO string) joined from markets table — used for WINDOW column display */
@@ -55,12 +48,6 @@ export interface SimulatedTrade {
   marketQuestion: string | null;
   /** Lowest bestBid observed while position was open (before window close) */
   minPriceDuringPosition: string | null;
-  /** Crossover data for oscillation analysis */
-  crossovers?: {
-    all: number;
-    last60s: number;
-    details: Array<{ side: "UP" | "DOWN"; ts: number }>;
-  };
 }
 
 // ============================================
@@ -115,12 +102,6 @@ export interface SystemStats {
     };
     btcConnected: boolean;
     btcPrice: number | null;
-    momentum: {
-      direction: "UP" | "DOWN" | "NEUTRAL";
-      changeUsd: number;
-      lookbackMs: number;
-      hasData: boolean;
-    } | null;
   };
   liveMarkets: LiveMarketInfo[];
   btcPrice: { price: number; timestamp: number } | null;
@@ -131,17 +112,10 @@ export interface SystemStats {
     tradeFromWindowSeconds: number;
     startingCapital: number;
     maxPositions: number;
-    minBtcDistanceUsd: number;
-    stopLossEnabled: boolean;
-    stopLossPriceTrigger: number;
-    takeProfitEnabled?: boolean;
-    takeProfitTriggerPrice?: number;
-    momentumEnabled?: boolean;
-    momentumLookbackMs?: number;
-    momentumMinChangeUsd?: number;
-    oscillationFilterEnabled?: boolean;
-    oscillationWindowMs?: number;
-    oscillationMaxCrossovers?: number;
+    stopLossPercent: number;
+    takeProfitPercent: number;
+    allocationPerMarket: number;
+    allocationPerSide: number;
     consecutiveLossPauseLimit?: number;
     riskAutoResumeEnabled?: boolean;
     riskAutoResumeCooldownMs?: number;
@@ -161,7 +135,6 @@ export type ActivityKind =
   | "TRADE_OPENED"
   | "TRADE_WIN"
   | "TRADE_LOSS"
-  | "MOMENTUM_SKIP"
   | "MARKET_RESOLVED"
   | "SYSTEM"
   | "INFO"
@@ -189,8 +162,6 @@ export interface DiscoveredMarket {
   conditionId: string | null;
   slug: string | null;
   question: string | null;
-  windowType: string;
-  category: string;
   endDate: string | null;
   targetPrice: string | null;
   active: boolean;
@@ -201,10 +172,6 @@ export interface DiscoveredMarket {
   updatedAt: string;
   /** Computed by the API: ACTIVE (window open) or ENDED (window closed) */
   computedStatus?: "ACTIVE" | "ENDED";
-  /** Market metadata including crossovers */
-  metadata?: {
-    crossovers?: Array<{ side: "UP" | "DOWN"; ts: number }>;
-  };
 }
 
 // ============================================
@@ -225,7 +192,6 @@ export interface PerformanceMetrics {
   largestWin: string;
   largestLoss: string;
   totalFees: string;
-  avgBtcDistance: string;
   openPositions: number;
   unrealizedPnl: string;
   cashBalance: string;

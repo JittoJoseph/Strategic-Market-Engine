@@ -336,10 +336,7 @@ function extractTimeWindow(
   trade: SimulatedTrade,
   marketEndDate: string | null,
 ): { time: string; date: string } {
-  const windowType = trade.windowType as MarketWindow | null;
-  const label = windowType
-    ? (MARKET_WINDOW_LABELS[windowType] ?? windowType)
-    : null;
+
 
   const fmtTime = (d: Date) =>
     d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });

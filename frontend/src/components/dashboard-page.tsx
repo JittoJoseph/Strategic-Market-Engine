@@ -51,13 +51,7 @@ export function DashboardPage() {
     price: number;
     timestamp: number;
   } | null>(null);
-  // Real-time momentum driven by btcPriceUpdate WS (falls back to stats on initial load)
-  const [momentum, setMomentum] = useState<{
-    direction: "UP" | "DOWN" | "NEUTRAL";
-    changeUsd: number;
-    lookbackMs: number;
-    hasData: boolean;
-  } | null>(null);
+
 
   // Data hooks — trades are WS-driven; no polling
   const {
@@ -90,9 +84,6 @@ export function DashboardPage() {
       if (d?.price && typeof d.price === "number") {
         setBtcPrice({ price: d.price, timestamp: d.timestamp ?? Date.now() });
       }
-      if (d?.momentum) {
-        setMomentum(d.momentum);
-      }
     }, []),
   );
 
@@ -105,12 +96,8 @@ export function DashboardPage() {
         if (d?.btcPrice && typeof d.btcPrice === "object") {
           setBtcPrice(d.btcPrice);
         }
-        // Only seed momentum from systemState if we don't have a live value yet
-        if (d?.momentum && !momentum) {
-          setMomentum(d.momentum);
-        }
       },
-      [momentum],
+      [],
     ),
   );
 
@@ -335,30 +322,6 @@ export function DashboardPage() {
                     value={stats.orchestrator.btcConnected ? "LIVE" : "OFFLINE"}
                     accent={stats.orchestrator.btcConnected}
                   />
-                  {/* Use live WS-driven momentum (updates every BTC tick ~1s) */}
-                  {(momentum ?? stats.orchestrator.momentum) && (
-                    <StatRow
-                      label="Momentum"
-                      value={`${
-                        (momentum ?? stats.orchestrator.momentum)!.direction
-                      } ${
-                        (momentum ?? stats.orchestrator.momentum)!.changeUsd >=
-                        0
-                          ? "+"
-                          : ""
-                      }$${Math.abs(
-                        (momentum ?? stats.orchestrator.momentum)!.changeUsd,
-                      ).toFixed(0)}`}
-                      accent={
-                        (momentum ?? stats.orchestrator.momentum)!.direction ===
-                        "UP"
-                      }
-                      warn={
-                        (momentum ?? stats.orchestrator.momentum)!.direction ===
-                        "DOWN"
-                      }
-                    />
-                  )}
                 </div>
               ) : null}
             </SidebarCard>
@@ -367,8 +330,8 @@ export function DashboardPage() {
               {stats?.config ? (
                 <div className="space-y-2 text-xs font-mono">
                   <StatRow
-                    label="Entry Range"
-                    value={`${(stats.config.entryPriceThreshold * 100).toFixed(0)}–${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
+                    label="Entry Max Price"
+                    value={`${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
                   />
                   <StatRow
                     label="Trade Window"
@@ -383,46 +346,18 @@ export function DashboardPage() {
                     value={stats.config.maxPositions?.toString() ?? "—"}
                   />
                   <StatRow
-                    label="BTC Min Dist"
-                    value={`$${stats.config.minBtcDistanceUsd}`}
-                  />
-                  <StatRow
-                    label="Momentum Filter"
-                    value={
-                      stats.config.momentumEnabled
-                        ? `$${stats?.config?.momentumMinChangeUsd}`
-                        : "DISABLED"
-                    }
-                  />
-                  <StatRow
-                    label="Oscillation Filter"
-                    value={
-                      stats?.config?.oscillationFilterEnabled
-                        ? `${stats?.config?.oscillationMaxCrossovers} times`
-                        : "DISABLED"
-                    }
+                    label="Allocation"
+                    value={`$${stats.config.allocationPerMarket} / market`}
                   />
                   <StatRow
                     label="Stop Loss"
-                    value={
-                      stats.config.stopLossEnabled
-                        ? `${(stats.config.stopLossPriceTrigger * 100).toFixed(0)}¢ trigger`
-                        : "DISABLED"
-                    }
-                    accent={stats.config.stopLossEnabled}
-                    warn={!stats.config.stopLossEnabled}
+                    value={`${(stats.config.stopLossPercent * 100).toFixed(0)}%`}
+                    accent={true}
                   />
                   <StatRow
                     label="Take Profit"
-                    value={
-                      stats.config.takeProfitEnabled
-                        ? stats.config.takeProfitTriggerPrice != null
-                          ? `${(stats.config.takeProfitTriggerPrice * 100).toFixed(0)}¢ trigger`
-                          : "ENABLED"
-                        : "DISABLED"
-                    }
-                    accent={!!stats.config.takeProfitEnabled}
-                    warn={!stats.config.takeProfitEnabled}
+                    value={`${(stats.config.takeProfitPercent * 100).toFixed(0)}%`}
+                    accent={true}
                   />
                   <StatRow
                     label="Risk Guard"
@@ -468,8 +403,6 @@ export function DashboardPage() {
       <MarketDetailModal
         market={selectedMarket}
         trades={trades}
-        oscillationWindowMs={stats?.config?.oscillationWindowMs ?? 60_000}
-        oscillationMaxCrossovers={stats?.config?.oscillationMaxCrossovers ?? 3}
         open={selectedMarket !== null}
         onClose={() => setSelectedMarket(null)}
       />
