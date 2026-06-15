@@ -187,30 +187,8 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              <Cell label="BUDGET" value={`$${budget.toFixed(4)}`} />
-              <Cell label="ACTUAL COST" value={`$${actualCost.toFixed(4)}`} />
-              
-              {/* Fee and Gross Breakdown */}
-              <div className="col-span-2 flex flex-col gap-1.5 py-2 px-4 border-t border-border/10 bg-muted/20">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">ENTRY FEES</span>
-                  <span className="text-[12px] tabular-nums text-foreground/80">${entryFees.toFixed(6)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">EXIT FEES</span>
-                  <span className="text-[12px] tabular-nums text-foreground/80">${exitFees.toFixed(6)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">TOTAL FEES</span>
-                  <span className="text-[12px] tabular-nums text-foreground/80">${totalFees.toFixed(6)}</span>
-                </div>
-                {isClosed && (
-                  <div className="flex justify-between items-center border-t border-border/10 mt-1 pt-1.5">
-                    <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">GROSS P&L</span>
-                    <span className={`text-[12px] tabular-nums ${pnlColor(grossPnl)}`}>{formatPnl(grossPnl)}</span>
-                  </div>
-                )}
-              </div>
+              <Cell label="COST" value={`$${actualCost.toFixed(2)}`} />
+              <Cell label="FEES" value={`$${totalFees.toFixed(4)}`} />
               <Cell
                 label="FILL STATUS"
                 value={
@@ -227,6 +205,12 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
+              {isClosed && (
+                <Cell 
+                  label="GROSS P&L" 
+                  value={<span className={pnlColor(grossPnl)}>{formatPnl(grossPnl)}</span>} 
+                />
+              )}
               {/* Min price spans full width when present */}
               {minPrice !== null && minPrice > 0 && minPrice < entryPrice && (
                 <div className="col-span-2 flex items-center justify-between py-2 px-4 border-t border-border/10 bg-amber-500/[0.03]">
