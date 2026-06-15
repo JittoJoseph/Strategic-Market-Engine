@@ -124,6 +124,7 @@ export async function createSimulatedTrade(data: {
   actualCost: string;
   entryFees?: string;
   fillStatus?: string;
+  orderType?: string;
   btcPriceAtEntry?: number;
   maxUnrealizedProfit?: string;
   maxUnrealizedLoss?: string;
@@ -135,7 +136,7 @@ export async function createSimulatedTrade(data: {
       marketId: data.marketId || null,
       tokenId: data.tokenId,
       side: "BUY",
-      orderType: "FAK",
+      orderType: data.orderType || "FAK",
       outcomeLabel: data.outcomeLabel || null,
       entryTs: data.entryTs,
       entryPrice: data.entryPrice,

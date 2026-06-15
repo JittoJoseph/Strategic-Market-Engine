@@ -23,6 +23,7 @@ import {
   type MarketOpportunity,
 } from "./strategy-engine.js";
 import {
+  simulateSplit,
   simulateLimitBuy,
   simulateLimitSell,
   calculateWinProfit,
@@ -152,7 +153,7 @@ export class MarketOrchestrator extends EventEmitter {
       {
         window: config.strategy.marketWindow,
         label: windowLabel,
-        allocationPerSide: config.strategy.allocationPerSide,
+        allocationPerSplit: config.strategy.allocationPerSplit,
         tradeWindowSec: config.strategy.tradeFromWindowSeconds,
         maxPositions: config.strategy.maxSimultaneousPositions,
         startingCapital: config.portfolio.startingCapital,
@@ -706,215 +707,143 @@ export class MarketOrchestrator extends EventEmitter {
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
     if (this.paused) return;
 
-    // Guard against concurrent executions for the same token
-    if (this.inFlightTokenIds.has(opp.tokenId)) {
-      logger.debug(
-        { tokenId: opp.tokenId, marketId: opp.marketId },
-        "onOpportunity skipped — already in-flight for this token",
-      );
+    const marketState = this.activeMarkets.get(opp.marketId);
+    if (!marketState) return;
+
+    // Check if we've already split this market (if we hold either token)
+    const hasYes =
+      this.positionsByToken.has(marketState.yesTokenId) &&
+      this.positionsByToken.get(marketState.yesTokenId)!.size > 0;
+    const hasNo =
+      this.positionsByToken.has(marketState.noTokenId) &&
+      this.positionsByToken.get(marketState.noTokenId)!.size > 0;
+    
+    if (hasYes || hasNo) {
+      return; // Already split / have positions
+    }
+
+    // In-flight tracking by marketId
+    if (this.inFlightTokenIds.has(opp.marketId)) {
       return;
     }
-    this.inFlightTokenIds.add(opp.tokenId);
+    this.inFlightTokenIds.add(opp.marketId);
 
     const config = getConfig();
 
     try {
-      // ── 1. Fetch live orderbook first (need depth for realistic fill) ──
-      const orderbookResult = await this.client.getOrderbook(opp.tokenId);
-      if (!orderbookResult?.data || !orderbookResult.data.asks?.length) {
-        logger.warn(
-          { tokenId: opp.tokenId },
-          "No orderbook available — will retry on next price update",
-        );
-        this.strategyEngine.clearEvaluated(opp.tokenId);
-        return;
-      }
-      const orderbook = orderbookResult.data;
+      const splitAmount = config.strategy.allocationPerSplit;
 
-      // Extract best ask from the live orderbook (sorted ascending)
-      const sortedAsks = [...orderbook.asks].sort(
-        (a, b) => parseFloat(a.price) - parseFloat(b.price),
-      );
-      const bestAskPrice =
-        sortedAsks.length > 0 ? parseFloat(sortedAsks[0]!.price) : opp.bestAsk;
-
-      // ── 2. Compute position budget (sized at maxEntryPrice) ──────────
-      const openPositionsValue = this.computeOpenPositionsValue();
-      const positionBudget =
-        this.portfolioManager.computePositionBudget(openPositionsValue);
-
-      if (positionBudget <= 0) {
+      // Enforce portfolio cash
+      const cash = this.portfolioManager.getCashBalance();
+      if (cash < splitAmount) {
         logger.info(
-          {
-            openPositionsValue,
-            cash: this.portfolioManager.getCashBalance(),
-          },
-          "Insufficient cash for minimum share count — skipping",
+          { cash, required: splitAmount },
+          "Insufficient cash for split",
         );
-        return;
+        return; // Will try again next tick if we don't clear evaluated, actually we want to clear it so it retries
       }
 
-      // ── 3. Simulate FAK buy — walk asks, respect depth at each level ──
-      const execution = simulateLimitBuy(
-        orderbook,
-        positionBudget,
-        config.strategy.maxEntryPrice,
-      );
+      // Simulate split
+      const execution = simulateSplit(splitAmount);
 
-      if (execution.totalShares <= 0) {
-        logger.warn(
-          {
-            tokenId: opp.tokenId,
-            maxEntryPrice: config.strategy.maxEntryPrice,
-            bestAsk: bestAskPrice,
-          },
-          "No fill — all asks above maxEntryPrice; will retry",
-        );
-        this.strategyEngine.clearEvaluated(opp.tokenId);
-        return;
-      }
-
-      // ── 4. Enforce Polymarket's min_order_size ────────────────────
-      if (execution.belowMinimumOrderSize) {
-        logger.warn(
-          {
-            tokenId: opp.tokenId,
-            filled: execution.totalShares,
-            minOrderSize: execution.minOrderSize,
-          },
-          `Rejecting: filled ${execution.totalShares.toFixed(2)} shares < min_order_size ${execution.minOrderSize}`,
-        );
-        this.strategyEngine.clearEvaluated(opp.tokenId);
-        return;
-      }
-
-      const expectedProfit = calculateWinProfit(
-        execution.averagePrice,
-        execution.totalShares,
-        execution.fees,
-      );
-
-      if (expectedProfit < 0.001) {
-        logger.debug(
-          { expectedProfit, tokenId: opp.tokenId },
-          "Expected profit too small",
-        );
-        return;
-      }
-
-      // ── 5. Deduct actual cost from cash ─────────────────────────
-      const actualCost = execution.netCost;
-      const deducted = await this.portfolioManager.deductCash(actualCost);
+      const deducted = await this.portfolioManager.deductCash(splitAmount);
       if (!deducted) {
-        logger.warn(
-          { actualCost, cash: this.portfolioManager.getCashBalance() },
-          "Insufficient cash for actual fill cost — skipping",
-        );
+        this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
-
-      // Determine fill status for audit
-      const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
 
       const entryTs = new Date();
-      const tradeRow = await createSimulatedTrade({
-        marketId: opp.marketId,
-        tokenId: opp.tokenId,
-        outcomeLabel: opp.outcomeLabel,
-        entryTs,
-        entryPrice: execution.averagePrice.toFixed(6),
-        entryShares: execution.totalShares.toFixed(6),
-        positionBudget: positionBudget.toFixed(6),
-        actualCost: actualCost.toFixed(6),
-        entryFees: execution.fees.toFixed(6),
-        fillStatus,
-        btcPriceAtEntry: opp.btcPrice ?? undefined,
-        maxUnrealizedProfit: "0",
-        maxUnrealizedLoss: "0",
-      });
-      const tradeId = tradeRow!.id;
 
-      // Track open position
-      const market = this.activeMarkets.get(opp.marketId);
-      this.trackPosition({
-        tradeId,
-        marketId: opp.marketId,
-        tokenId: opp.tokenId,
-        outcomeLabel: opp.outcomeLabel,
-        entryPrice: execution.averagePrice,
-        entryShares: execution.totalShares,
-        fees: execution.fees,
-        actualCost,
-        marketEndDate: market?.endDate ?? new Date(),
-        minPriceDuringPosition: execution.averagePrice, // start at entry
-        maxPriceDuringPosition: execution.averagePrice, // start at entry
-        stopLossTriggered: false,
-        takeProfitTriggered: false,
-        resolving: false,
-      });
+      // Create trades for both sides
+      const tokens = [
+        { id: marketState.yesTokenId, label: marketState.outcomes[0] || "Yes" },
+        { id: marketState.noTokenId, label: marketState.outcomes[1] || "No" },
+      ];
+
+      for (const token of tokens) {
+        const tradeRow = await createSimulatedTrade({
+          marketId: opp.marketId,
+          tokenId: token.id,
+          outcomeLabel: token.label,
+          orderType: "SPLIT",
+          entryTs,
+          entryPrice: execution.averagePrice.toFixed(6),
+          entryShares: execution.totalShares.toFixed(6),
+          positionBudget: execution.totalCost.toFixed(6),
+          actualCost: execution.netCost.toFixed(6),
+          entryFees: "0",
+          fillStatus: "FULL",
+          btcPriceAtEntry: opp.btcPrice ?? undefined,
+          maxUnrealizedProfit: "0",
+          maxUnrealizedLoss: "0",
+        });
+
+        const tradeId = tradeRow!.id;
+
+        this.trackPosition({
+          tradeId,
+          marketId: opp.marketId,
+          tokenId: token.id,
+          outcomeLabel: token.label,
+          entryPrice: execution.averagePrice,
+          entryShares: execution.totalShares,
+          fees: 0,
+          actualCost: execution.netCost,
+          marketEndDate: marketState.endDate,
+          minPriceDuringPosition: execution.averagePrice,
+          maxPriceDuringPosition: execution.averagePrice,
+          stopLossTriggered: false,
+          takeProfitTriggered: false,
+          resolving: false,
+        });
+
+        this.emit("tradeOpened", {
+          tradeId,
+          trade: tradeRow,
+          ...opp, // pass through opportunity data
+          tokenId: token.id,
+          outcomeLabel: token.label,
+          execution,
+          expectedProfit: 0, // Initial PnL is 0 for split
+        });
+      }
 
       this.scheduleResolutionMonitor(opp.marketId);
+      this.cycleCount++;
 
       await logAudit(
         "info",
         "TRADE_OPENED",
-        `Trade ${tradeId} opened for ${opp.outcomeLabel}`,
+        `Split executed for market ${opp.marketId}`,
         {
-          tradeId,
-          tokenId: opp.tokenId,
-          outcome: opp.outcomeLabel,
-          avgPrice: execution.averagePrice,
-          shares: execution.totalShares,
-          positionBudget,
-          actualCost,
-          expectedProfit,
-          btcPrice: opp.btcPrice,
-          secondsToEnd: opp.secondsToEnd,
+          marketId: opp.marketId,
+          allocation: splitAmount,
+          sharesPerSide: execution.totalShares,
           cashRemaining: this.portfolioManager.getCashBalance(),
         },
       );
 
-      this.cycleCount++;
-      // Clone execution and strip orderbookSnapshot before emitting
-      const safeExecution = { ...execution };
-      delete safeExecution.orderbookSnapshot;
-
-      this.emit("tradeOpened", {
-        tradeId,
-        trade: tradeRow,
-        ...opp,
-        execution: safeExecution,
-        expectedProfit,
-      });
-
       logger.info(
         {
-          tradeId,
           marketId: opp.marketId,
-          outcome: opp.outcomeLabel,
-          avgPrice: execution.averagePrice.toFixed(4),
-          shares: execution.totalShares.toFixed(2),
-          budget: positionBudget.toFixed(2),
-          actualCost: actualCost.toFixed(4),
-          fees: execution.fees.toFixed(4),
-          expectedProfit: expectedProfit.toFixed(4),
-          btcPrice: opp.btcPrice?.toFixed(2) ?? "none",
+          allocation: splitAmount.toFixed(2),
+          sharesPerSide: execution.totalShares.toFixed(2),
           cashRemaining: this.portfolioManager.getCashBalance().toFixed(2),
         },
-        "📈 Simulated trade opened",
+        "🔀 Market split executed",
       );
     } catch (error) {
       logger.error(
-        { error, marketId: opp.marketId, tokenId: opp.tokenId },
-        "Failed to execute simulated trade",
+        { error, marketId: opp.marketId },
+        "Failed to split market",
       );
       logAudit(
         "error",
         "SYSTEM",
-        `Failed to execute simulated trade for market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to split market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
     } finally {
-      this.inFlightTokenIds.delete(opp.tokenId);
+      this.inFlightTokenIds.delete(opp.marketId);
     }
   }
 

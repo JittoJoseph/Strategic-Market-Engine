@@ -65,7 +65,7 @@ export const simulatedTrades = pgTable(
     tokenId: text("token_id"),
     side: text("side").default("BUY").notNull(),
     outcomeLabel: text("outcome_label"), // "Up" or "Down"
-    orderType: text("order_type").default("FAK").notNull(),
+    orderType: text("order_type").default("SPLIT").notNull(), // FAK | SPLIT
     // Entry
     entryTs: timestamp("entry_ts").notNull(),
     entryPrice: decimal("entry_price", { precision: 18, scale: 8 }).notNull(),

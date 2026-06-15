@@ -160,8 +160,7 @@ export class ApiServer {
           btcPrice: btcWatcher.getCurrentPrice(),
           config: {
             marketWindow: config.strategy.marketWindow,
-            allocationPerMarket: config.strategy.allocationPerMarket,
-            allocationPerSide: config.strategy.allocationPerSide,
+            allocationPerSplit: config.strategy.allocationPerSplit,
             takeProfitPercent: config.strategy.takeProfitPercent,
             stopLossPercent: config.strategy.stopLossPercent,
             consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,

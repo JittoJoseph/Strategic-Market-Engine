@@ -72,7 +72,7 @@ export class PortfolioManager {
 
   computePositionBudget(openPositionsValue: number): number {
     const config = getConfig();
-    const budget = new Decimal(config.strategy.allocationPerSide);
+    const budget = new Decimal(config.strategy.allocationPerSplit);
 
     // If we can't even afford the fixed budget, skip
     if (this.cashBalance.lt(budget)) {

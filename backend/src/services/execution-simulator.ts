@@ -58,6 +58,40 @@ interface FillDetail {
  * @param usdAmount   USDC budget for this order
  * @param limitPrice  Maximum price we are willing to pay per share
  */
+
+/**
+ * Simulates an on-chain split of pUSD into perfectly matched CTF outcome tokens.
+ * By minting equal amounts of YES and NO shares, a split avoids all orderbook
+ * spread, slippage, and fees. $1 pUSD always mints exactly 1 YES and 1 NO.
+ *
+ * @param usdAmount USDC budget to split. This translates directly to shares
+ *                  (e.g., $5 splits into 5 UP shares and 5 DOWN shares).
+ */
+export function simulateSplit(usdAmount: number): ExecutionResult {
+  const shares = usdAmount; // $1 mints 1 set of shares
+  // Assuming a binary market split (UP/DOWN)
+  // The cost basis per side is conceptually $0.50 since $1 buys 1 of each.
+  return {
+    averagePrice: 0.50,
+    totalShares: shares,
+    totalCost: usdAmount / 2, // Half the budget is conceptually assigned to each side
+    fees: 0,
+    netCost: usdAmount / 2,
+    isPartialFill: false,
+    belowMinimumOrderSize: false,
+    minOrderSize: 5,
+    fillDetails: [
+      {
+        price: 0.50,
+        shares,
+        cost: usdAmount / 2,
+        feeForLevel: 0,
+      },
+    ],
+    orderbookSnapshot: null,
+  };
+}
+
 export function simulateLimitBuy(
   orderbook: Orderbook,
   usdAmount: number,

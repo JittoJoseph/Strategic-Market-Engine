@@ -114,8 +114,7 @@ export interface SystemStats {
     maxPositions: number;
     stopLossPercent: number;
     takeProfitPercent: number;
-    allocationPerMarket: number;
-    allocationPerSide: number;
+    allocationPerSplit: number;
     consecutiveLossPauseLimit?: number;
     riskAutoResumeEnabled?: boolean;
     riskAutoResumeCooldownMs?: number;

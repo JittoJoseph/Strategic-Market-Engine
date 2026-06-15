@@ -347,7 +347,7 @@ export function DashboardPage() {
                   />
                   <StatRow
                     label="Allocation"
-                    value={`$${stats.config.allocationPerMarket} / market`}
+                    value={`$${stats.config.allocationPerSplit} / split`}
                   />
                   <StatRow
                     label="Stop Loss"
