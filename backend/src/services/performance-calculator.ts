@@ -63,7 +63,17 @@ export async function calculatePortfolioPerformance(
   }
 
   const baseQuery = db
-    .select()
+    .select({
+      id: schema.simulatedTrades.id,
+      status: schema.simulatedTrades.status,
+      actualCost: schema.simulatedTrades.actualCost,
+      entryFees: schema.simulatedTrades.entryFees,
+      realizedPnl: schema.simulatedTrades.realizedPnl,
+      exitOutcome: schema.simulatedTrades.exitOutcome,
+      tokenId: schema.simulatedTrades.tokenId,
+      entryPrice: schema.simulatedTrades.entryPrice,
+      entryShares: schema.simulatedTrades.entryShares,
+    })
     .from(schema.simulatedTrades)
     .orderBy(desc(schema.simulatedTrades.entryTs));
 
@@ -129,10 +139,6 @@ export async function calculatePortfolioPerformance(
       }
     }
 
-    if (trade.btcDistanceUsd) {
-      btcDistanceSum = btcDistanceSum.plus(new Decimal(trade.btcDistanceUsd));
-      btcDistanceCount++;
-    }
   }
 
   const closedTrades = wins + losses;

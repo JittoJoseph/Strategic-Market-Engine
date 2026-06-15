@@ -189,7 +189,6 @@ export class MarketScanner extends EventEmitter {
         endDate: market.endDate,
         targetPrice,
         active: market.active ?? true,
-        metadata: market,
       });
 
       return wasNew;

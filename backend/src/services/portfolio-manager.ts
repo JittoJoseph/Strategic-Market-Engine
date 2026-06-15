@@ -70,58 +70,23 @@ export class PortfolioManager {
 
   // ── Position sizing ──────────────────────────────────────────
 
-  /**
-   * Compute the budget for the next position.
-   *
-   * Budget is sized at **maxEntryPrice** (the worst-case price we'd accept),
-   * not at the current best ask. This guarantees the budget can fill at
-   * least POLYMARKET_MIN_ORDER_SIZE shares even if every eligible ask level
-   * is right at our limit price.
-   *
-   *   maxPrice   = config.strategy.maxEntryPrice
-   *   rawBudget  = portfolioValue / maxSimultaneousPositions
-   *   minBudget  = MIN_ORDER_SIZE × (maxPrice + fee_at_maxPrice)
-   *   budget     = max(rawBudget, minBudget)
-   *   if cash < minBudget → return 0 (can't afford minimum order)
-   *   cap at cashBalance
-   *
-   * @param openPositionsValue  Sum of actualCost for all OPEN trades
-   * @returns Budget in USD, or 0 if cash can't cover the minimum share count
-   */
   computePositionBudget(openPositionsValue: number): number {
     const config = getConfig();
-    const minShares = POLYMARKET_MIN_ORDER_SIZE;
-    const maxPrice = config.strategy.maxEntryPrice;
-    const portfolioValue = this.cashBalance.plus(openPositionsValue);
-    const rawBudget = portfolioValue.div(
-      config.strategy.maxSimultaneousPositions,
-    );
+    const budget = new Decimal(config.strategy.allocationPerSide);
 
-    // Cost of the minimum share count at maxEntryPrice (worst case we'd accept)
-    const feePerShare = calculateFeePerShare(maxPrice);
-    const costPerShare = new Decimal(maxPrice).plus(feePerShare);
-    const minBudget = costPerShare.mul(minShares);
-
-    // Use whichever is larger: the equal-share slice or the minimum-shares cost
-    const budget = Decimal.max(rawBudget, minBudget);
-
-    // If we can't even afford the minimum shares at worst-case price, skip
-    if (this.cashBalance.lt(minBudget)) {
+    // If we can't even afford the fixed budget, skip
+    if (this.cashBalance.lt(budget)) {
       logger.warn(
         {
           cash: this.cashBalance.toString(),
-          minBudget: minBudget.toString(),
-          minShares,
-          maxEntryPrice: maxPrice,
+          requiredBudget: budget.toString(),
         },
-        `Insufficient cash for ${minShares}-share minimum at maxEntryPrice — skipping`,
+        `Insufficient cash for fixed allocation — skipping`,
       );
       return 0;
     }
 
-    // Don't spend more than available cash.
-    const capped = Decimal.min(budget, this.cashBalance);
-    return capped.toDP(8).toNumber();
+    return budget.toDP(8).toNumber();
   }
 
   // ── Cash mutations ───────────────────────────────────────────
