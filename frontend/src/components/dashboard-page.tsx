@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
 import { pnlColor, formatPnl } from "@/lib/utils";
+import NumberFlow from "@number-flow/react";
 import {
   useTrades,
   useSystemStats,
@@ -502,8 +503,7 @@ function TopDashboardSection({
   const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
   const gainFromInitial = portfolioValue - initialCapital;
-  const animatedGainFromInitial = useAnimatedNumber(gainFromInitial, 300);
-  const mainDisplayValue = animatedGainFromInitial;
+  const mainDisplayValue = gainFromInitial;
   const windowType = stats?.config?.marketWindow || "5M";
 
   // Effective BTC price at window start: use captured value or fall back to entry price from trade
@@ -787,13 +787,18 @@ function TopDashboardSection({
                 <div
                   className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${pnlColor(mainDisplayValue)}`}
                 >
-                  {formatPnl(mainDisplayValue)}
+                  <NumberFlow 
+                    value={mainDisplayValue} 
+                    format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
+                  />
                 </div>
                 <div
                   className={`text-xs font-mono mt-1 ${pnlColor(roi, "70")}`}
                 >
-                  {roi >= 0 ? "+" : ""}
-                  {roi.toFixed(2)}% ROI
+                  <NumberFlow 
+                    value={roi / 100} 
+                    format={{ style: 'percent', signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 }}
+                  /> ROI
                 </div>
               </div>
               <div className="space-y-3 pt-1">
@@ -804,7 +809,10 @@ function TopDashboardSection({
                   <div
                     className={`text-sm font-bold font-mono tabular-nums ${pnlColor(unrealizedPnl)}`}
                   >
-                    {formatPnl(unrealizedPnl)}
+                    <NumberFlow 
+                      value={unrealizedPnl} 
+                      format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
+                    />
                   </div>
                 </div>
                 <div>
@@ -812,7 +820,7 @@ function TopDashboardSection({
                     INITIAL CAPITAL
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    ${initialCapital.toFixed(2)}
+                    <NumberFlow value={initialCapital} format={{ style: 'currency', currency: 'USD' }} />
                   </div>
                 </div>
                 <div>
@@ -820,7 +828,7 @@ function TopDashboardSection({
                     CURRENT VALUE
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    ${portfolioValue.toFixed(2)}
+                    <NumberFlow value={portfolioValue} format={{ style: 'currency', currency: 'USD' }} />
                   </div>
                 </div>
               </div>
@@ -833,11 +841,10 @@ function TopDashboardSection({
                   PORTFOLIO VALUE
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-foreground">
-                  ${portfolioValue.toFixed(2)}
+                  <NumberFlow value={portfolioValue} format={{ style: 'currency', currency: 'USD' }} />
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
-                  cash ${cashBalance.toFixed(2)} + positions $
-                  {openPositionsValue.toFixed(2)}
+                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5 flex gap-1">
+                  cash <NumberFlow value={cashBalance} format={{ style: 'currency', currency: 'USD' }} /> + positions <NumberFlow value={openPositionsValue} format={{ style: 'currency', currency: 'USD' }} />
                 </div>
               </div>
 
