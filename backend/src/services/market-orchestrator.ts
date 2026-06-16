@@ -8,6 +8,7 @@ import {
   resolveTrade,
   logAudit,
   loadOpenTradesWithMarkets,
+  insertMarketIfNew,
 } from "../db/client.js";
 import * as schema from "../db/schema.js";
 import { eq, and, desc, gte, sql } from "drizzle-orm";
@@ -56,6 +57,7 @@ interface ActiveMarketState {
   lastPrices: Record<string, { bid: number; ask: number; mid: number }>;
   subscribedWs: boolean;
   resolved: boolean;
+  rawMarket: any;
 }
 
 /** Tracks an open simulated position during resolution */
@@ -571,6 +573,7 @@ export class MarketOrchestrator extends EventEmitter {
       lastPrices: {},
       subscribedWs: false,
       resolved: false,
+      rawMarket: market,
     };
 
     this.registerMarketState(state);
@@ -840,6 +843,27 @@ export class MarketOrchestrator extends EventEmitter {
 
       // Determine fill status for audit
       const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
+
+      // ── Ensure market is persisted ───────────────────────────
+      const marketState = this.activeMarkets.get(opp.marketId);
+      if (marketState && marketState.rawMarket) {
+        const tokenIds = PolymarketClient.parseClobTokenIds(marketState.rawMarket);
+        const outcomes = PolymarketClient.parseOutcomes(marketState.rawMarket);
+        
+        await insertMarketIfNew(opp.marketId, {
+          conditionId: marketState.conditionId ?? "",
+          slug: marketState.slug ?? undefined,
+          question: marketState.question ?? undefined,
+          clobTokenIds: tokenIds,
+          outcomes,
+          windowType: config.strategy.marketWindow,
+          category: "Crypto",
+          endDate: marketState.endDate.toISOString(),
+          targetPrice: marketState.targetPrice,
+          active: true,
+          metadata: marketState.rawMarket,
+        });
+      }
 
       const entryTs = new Date();
       const tradeRow = await createSimulatedTrade({
@@ -1692,6 +1716,7 @@ export class MarketOrchestrator extends EventEmitter {
         lastPrices: {},
         subscribedWs: false,
         resolved: false,
+        rawMarket: row.metadata,
       };
 
       this.registerMarketState(state);
@@ -1779,6 +1804,13 @@ export class MarketOrchestrator extends EventEmitter {
         }
       }),
     );
+  }
+
+  /** Expose the raw GammaMarkets for active markets (for API merging) */
+  getRawActiveMarkets(): any[] {
+    return Array.from(this.activeMarkets.values())
+      .map(state => state.rawMarket)
+      .filter(Boolean);
   }
 
   /**

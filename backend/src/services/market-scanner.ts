@@ -7,7 +7,6 @@ import {
   type WindowConfig,
 } from "../types/index.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
-import { insertMarketIfNew } from "../db/client.js";
 
 const logger = createModuleLogger("market-scanner");
 
@@ -32,9 +31,10 @@ const logger = createModuleLogger("market-scanner");
  */
 export class MarketScanner extends EventEmitter {
   private client: PolymarketClient;
-  private scanInterval: ReturnType<typeof setInterval> | null = null;
+  private scanInterval: NodeJS.Timeout | null = null;
   private discoveredCount = 0;
   private running = false;
+  private catalogedMarketIds = new Map<string, number>();
 
   /** How many future windows to pre-fetch alongside the current one */
   private static readonly LOOKAHEAD_WINDOWS = 3;
@@ -174,25 +174,24 @@ export class MarketScanner extends EventEmitter {
     windowConfig: WindowConfig,
   ): Promise<boolean> {
     try {
-      const tokenIds = PolymarketClient.parseClobTokenIds(market);
-      const outcomes = PolymarketClient.parseOutcomes(market);
-      const targetPrice = PolymarketClient.parseTargetPrice(market.question);
+      const now = Date.now();
+      if (this.catalogedMarketIds.has(market.id)) {
+        this.catalogedMarketIds.set(market.id, now);
+        return false;
+      }
+      this.catalogedMarketIds.set(market.id, now);
 
-      const wasNew = await insertMarketIfNew(market.id, {
-        conditionId: market.conditionId,
-        slug: market.slug ?? undefined,
-        question: market.question ?? undefined,
-        clobTokenIds: tokenIds,
-        outcomes,
-        windowType: getConfig().strategy.marketWindow,
-        category: windowConfig.category,
-        endDate: market.endDate,
-        targetPrice,
-        active: market.active ?? true,
-        metadata: market,
-      });
+      // Memory cleanup: prune markets we haven't seen in the scan results for over an hour
+      if (this.catalogedMarketIds.size > 500) {
+        const threshold = now - 60 * 60 * 1000; // 1 hour ago
+        for (const [id, lastSeen] of this.catalogedMarketIds.entries()) {
+          if (lastSeen < threshold) {
+            this.catalogedMarketIds.delete(id);
+          }
+        }
+      }
 
-      return wasNew;
+      return true;
     } catch (error) {
       logger.error({ error, marketId: market.id }, "Failed to catalog market");
       return false;

@@ -252,7 +252,44 @@ export class ApiServer {
           .limit(limit)
           .offset(offset);
 
-        res.json(markets);
+        let finalMarkets = [...markets];
+        if (offset === 0) {
+          const orchestrator = getMarketOrchestrator();
+          const rawActive = orchestrator.getRawActiveMarkets();
+          const activeFormatted = rawActive.map((m: any) => {
+            const tokens = m.tokens || [];
+            const clobTokenIds = tokens.map((t: any) => t.token_id);
+            let outcomes = [];
+            try {
+              outcomes = m.outcomes ? (typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : m.outcomes) : [];
+            } catch (e) {}
+            return {
+              id: m.id,
+              conditionId: m.conditionId || "",
+              slug: m.slug || "",
+              question: m.question || "",
+              windowType: "5M",
+              category: "Crypto",
+              endDate: m.endDate ? new Date(m.endDate).toISOString() : new Date().toISOString(),
+              targetPrice: null,
+              active: m.active ?? true,
+              outcomes,
+              clobTokenIds,
+              lastFetchedAt: new Date(),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              metadata: m,
+            };
+          });
+
+          const activeIds = new Set(activeFormatted.map(m => m.id));
+          const filteredDb = markets.filter(m => !activeIds.has(m.id));
+          
+          activeFormatted.sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
+          finalMarkets = [...activeFormatted, ...filteredDb];
+        }
+
+        res.json(finalMarkets);
       } catch (error) {
         logger.error({ error }, "Markets list error");
         res.status(500).json({ error: "Failed to get markets" });
