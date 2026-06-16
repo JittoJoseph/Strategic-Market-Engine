@@ -1,5 +1,5 @@
 /**
- * Types for the PenguinX BTC end-of-window micro-profit simulation frontend.
+ * Types for the PenguinX BTC split-entry oscillation/volatility simulation frontend.
  */
 
 // ============================================

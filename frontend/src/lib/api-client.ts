@@ -1,5 +1,5 @@
 /**
- * API client for the PenguinX BTC end-of-window micro-profit simulation backend.
+ * API client for the PenguinX BTC split-entry oscillation/volatility simulation backend.
  */
 
 import type {

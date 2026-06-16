@@ -12,7 +12,7 @@ import {
 import { sql } from "drizzle-orm";
 
 // ============================================
-// BTC End-of-Window Micro-Profit Simulation Schema
+// Split-entry Oscillation/Volatility Strategy Schema
 // ============================================
 
 /** Cached market metadata from Gamma API */

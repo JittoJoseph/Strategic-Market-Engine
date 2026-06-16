@@ -50,7 +50,7 @@ export function TradesTable({
           No trades yet
         </div>
         <div className="text-xs text-muted-foreground/50 font-mono">
-          Waiting for end-of-window opportunities…
+          Waiting for split-entry opportunities…
         </div>
       </div>
     );

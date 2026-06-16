@@ -10,7 +10,7 @@ const logger = createModuleLogger("main");
 async function main(): Promise<void> {
   logger.info("═══════════════════════════════════════════");
   logger.info("  PenguinX BTC Analysis — v3.0");
-  logger.info("  End-of-Window Micro-Profit Strategy");
+  logger.info("  Split-entry Oscillation/Volatility Strategy");
   logger.info("═══════════════════════════════════════════");
 
   // 1. Load and validate configuration
