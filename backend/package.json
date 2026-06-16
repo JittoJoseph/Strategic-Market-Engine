@@ -22,8 +22,8 @@
     "axios": "^1.6.7",
     "decimal.js": "^10.4.3",
     "dotenv": "^16.4.4",
+    "drizzle-kit": "^0.18.1",
     "drizzle-orm": "^0.45.1",
-    "drizzle-kit": "^0.31.8",
     "express": "^4.18.2",
     "pino": "^8.19.0",
     "pino-pretty": "^10.3.1",
@@ -33,11 +33,11 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/node": "^20.11.19",
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "eslint": "^9.39.2",
     "msw": "^2.2.1",
-    "@types/node": "^20.11.19",
     "tsx": "^4.7.1",
     "vitest": "^4.0.18"
   },
