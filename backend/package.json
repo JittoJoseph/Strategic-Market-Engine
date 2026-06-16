@@ -22,7 +22,7 @@
     "axios": "^1.6.7",
     "decimal.js": "^10.4.3",
     "dotenv": "^16.4.4",
-    "drizzle-kit": "^0.18.1",
+    "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.1",
     "express": "^4.18.2",
     "pino": "^8.19.0",
