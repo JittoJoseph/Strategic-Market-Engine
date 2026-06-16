@@ -142,6 +142,15 @@ export class ApiClient {
     });
   }
 
+  async wipeSystem(
+    password: string,
+  ): Promise<{ success: boolean; message: string }> {
+    return fetchWithRetry(`${this.baseUrl}/api/admin/wipe`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${password}` },
+    });
+  }
+
   async getAnalysis(params?: {
     simulations?: number;
     tradesPerSim?: number;
