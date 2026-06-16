@@ -182,7 +182,7 @@ export class MarketScanner extends EventEmitter {
       this.catalogedMarketIds.set(market.id, now);
 
       // Memory cleanup: prune markets we haven't seen in the scan results for over an hour
-      if (this.catalogedMarketIds.size > 500) {
+      if (this.catalogedMarketIds.size > 100) {
         const threshold = now - 60 * 60 * 1000; // 1 hour ago
         for (const [id, lastSeen] of this.catalogedMarketIds.entries()) {
           if (lastSeen < threshold) {
