@@ -17,6 +17,7 @@ import {
   type TimePeriod,
 } from "./performance-calculator.js";
 import { runMonteCarloAnalysis } from "./monte-carlo.js";
+import type { Crossover } from "./strategy-engine.js";
 
 const logger = createModuleLogger("api-server");
 
@@ -73,10 +74,18 @@ export class ApiServer {
       this.broadcast({ type: "tradeResolved", data }),
     );
 
-    // BTC price updates
+    // BTC price updates — also carry the latest momentum signal so the
+    // frontend gets real-time momentum updates on every tick, not just every 2s.
     const btcWatcher = getBtcPriceWatcher();
     btcWatcher.on("btcPriceUpdate", (data) => {
-      this.broadcast({ type: "btcPriceUpdate", data: { ...data } });
+      const config = getConfig();
+      const momentum = config.strategy.momentumEnabled
+        ? btcWatcher.getMomentum(
+            config.strategy.momentumLookbackMs,
+            config.strategy.momentumMinChangeUsd,
+          )
+        : null;
+      this.broadcast({ type: "btcPriceUpdate", data: { ...data, momentum } });
     });
 
     return new Promise((resolve) => {
@@ -160,13 +169,22 @@ export class ApiServer {
           btcPrice: btcWatcher.getCurrentPrice(),
           config: {
             marketWindow: config.strategy.marketWindow,
+            entryPriceThreshold: config.strategy.entryPriceThreshold,
             maxEntryPrice: config.strategy.maxEntryPrice,
             tradeFromWindowSeconds: config.strategy.tradeFromWindowSeconds,
-            maxPositions: config.strategy.maxSimultaneousPositions,
             startingCapital: config.portfolio.startingCapital,
-            allocationPerSplit: config.strategy.allocationPerSplit,
-            takeProfitPercent: config.strategy.takeProfitPercent,
-            stopLossPercent: config.strategy.stopLossPercent,
+            maxPositions: config.strategy.maxSimultaneousPositions,
+            minBtcDistanceUsd: config.strategy.minBtcDistanceUsd,
+            stopLossEnabled: config.strategy.stopLossEnabled,
+            stopLossPriceTrigger: config.strategy.stopLossPriceTrigger,
+            takeProfitEnabled: config.strategy.takeProfitEnabled,
+            takeProfitTriggerPrice: config.strategy.takeProfitTriggerPrice,
+            momentumEnabled: config.strategy.momentumEnabled,
+            momentumLookbackMs: config.strategy.momentumLookbackMs,
+            momentumMinChangeUsd: config.strategy.momentumMinChangeUsd,
+            oscillationFilterEnabled: config.strategy.oscillationFilterEnabled,
+            oscillationWindowMs: config.strategy.oscillationWindowMs,
+            oscillationMaxCrossovers: config.strategy.oscillationMaxCrossovers,
             consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
             riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
             riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,
@@ -227,6 +245,7 @@ export class ApiServer {
             lastFetchedAt: schema.markets.lastFetchedAt,
             createdAt: schema.markets.createdAt,
             updatedAt: schema.markets.updatedAt,
+            metadata: schema.markets.metadata,
           })
           .from(schema.markets)
           .orderBy(desc(schema.markets.endDate))
@@ -259,6 +278,7 @@ export class ApiServer {
             marketEndDate: schema.markets.endDate,
             marketSlug: schema.markets.slug,
             marketQuestion: schema.markets.question,
+            marketMetadata: schema.markets.metadata,
           })
           .from(schema.simulatedTrades)
           .leftJoin(
@@ -276,12 +296,24 @@ export class ApiServer {
 
         res.json(
           rows.map((r) => {
+            const crossovers = (r.marketMetadata as any)?.crossovers as
+              | Crossover[]
+              | undefined;
+            const entryTs = new Date(r.trade.entryTs).getTime();
+            const last60sCrossovers =
+              crossovers?.filter((c) => c.ts >= entryTs - 60_000) || [];
+            const allCrossovers = crossovers || [];
 
             return {
               ...r.trade,
               marketEndDate: r.marketEndDate ?? null,
               marketSlug: r.marketSlug ?? null,
               marketQuestion: r.marketQuestion ?? null,
+              crossovers: {
+                all: allCrossovers.length,
+                last60s: last60sCrossovers.length,
+                details: allCrossovers, // Send full details for hover
+              },
             };
           }),
         );

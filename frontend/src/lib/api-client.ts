@@ -1,5 +1,5 @@
 /**
- * API client for the PenguinX BTC split-entry oscillation/volatility simulation backend.
+ * API client for the PenguinX BTC end-of-window micro-profit simulation backend.
  */
 
 import type {
@@ -138,15 +138,6 @@ export class ApiClient {
   ): Promise<{ success: boolean; paused: boolean }> {
     return fetchWithRetry(`${this.baseUrl}/api/admin/resume`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${password}` },
-    });
-  }
-
-  async wipeSystem(
-    password: string,
-  ): Promise<{ success: boolean; message: string }> {
-    return fetchWithRetry(`${this.baseUrl}/api/admin/wipe`, {
-      method: "DELETE",
       headers: { Authorization: `Bearer ${password}` },
     });
   }

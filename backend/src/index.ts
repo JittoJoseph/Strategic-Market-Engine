@@ -10,7 +10,7 @@ const logger = createModuleLogger("main");
 async function main(): Promise<void> {
   logger.info("═══════════════════════════════════════════");
   logger.info("  PenguinX BTC Analysis — v3.0");
-  logger.info("  Split-entry Oscillation/Volatility Strategy");
+  logger.info("  End-of-Window Micro-Profit Strategy");
   logger.info("═══════════════════════════════════════════");
 
   // 1. Load and validate configuration
@@ -18,9 +18,15 @@ async function main(): Promise<void> {
   logger.info(
     {
       window: config.strategy.marketWindow,
+      threshold: config.strategy.entryPriceThreshold,
+      maxEntryPrice: config.strategy.maxEntryPrice,
       tradeWindowSec: config.strategy.tradeFromWindowSeconds,
       startingCapital: config.portfolio.startingCapital,
       maxPositions: config.strategy.maxSimultaneousPositions,
+      minBtcDistance: config.strategy.minBtcDistanceUsd,
+      stopLoss: config.strategy.stopLossEnabled
+        ? config.strategy.stopLossPriceTrigger
+        : "disabled",
     },
     "Configuration loaded",
   );

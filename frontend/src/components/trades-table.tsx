@@ -2,7 +2,6 @@
 
 import type { SimulatedTrade, LiveMarketPrice } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
-import NumberFlow from "@number-flow/react";
 import { pnlColor, formatPnl } from "@/lib/utils";
 
 interface TradesTableProps {
@@ -50,7 +49,7 @@ export function TradesTable({
           No trades yet
         </div>
         <div className="text-xs text-muted-foreground/50 font-mono">
-          Waiting for split-entry opportunities…
+          Waiting for end-of-window opportunities…
         </div>
       </div>
     );
@@ -238,18 +237,13 @@ export function TradesTable({
                       <span
                         className={`tabular-nums font-semibold ${pnlColor(realizedPnl)}`}
                       >
-                        <NumberFlow 
-                          value={realizedPnl} 
-                          format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
-                        />
+                        {formatPnl(realizedPnl)}
                       </span>
                       <span
                         className={`text-[10px] tabular-nums ${pnlColor(realizedPnl, "60")}`}
                       >
-                        <NumberFlow 
-                          value={realizedPnlPct / 100} 
-                          format={{ style: 'percent', signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 }}
-                        />
+                        {realizedPnlPct >= 0 ? "+" : ""}
+                        {realizedPnlPct.toFixed(2)}%
                       </span>
                     </div>
                   ) : unrealizedPnl !== null ? (
@@ -261,10 +255,7 @@ export function TradesTable({
                             : "text-red-400"
                         }`}
                       >
-                        <NumberFlow 
-                          value={unrealizedPnl} 
-                          format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
-                        />
+                        {formatPnl(unrealizedPnl)}
                       </span>
                       {unrealizedPnlPct !== null && (
                         <span
@@ -274,10 +265,8 @@ export function TradesTable({
                               : "text-red-400/60"
                           }`}
                         >
-                          <NumberFlow 
-                            value={unrealizedPnlPct / 100} 
-                            format={{ style: 'percent', signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 }}
-                          />
+                          {unrealizedPnlPct >= 0 ? "+" : ""}
+                          {unrealizedPnlPct.toFixed(2)}%
                         </span>
                       )}
                     </div>
@@ -347,7 +336,10 @@ function extractTimeWindow(
   trade: SimulatedTrade,
   marketEndDate: string | null,
 ): { time: string; date: string } {
-
+  const windowType = trade.windowType as MarketWindow | null;
+  const label = windowType
+    ? (MARKET_WINDOW_LABELS[windowType] ?? windowType)
+    : null;
 
   const fmtTime = (d: Date) =>
     d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });

@@ -26,18 +26,16 @@ export function TradeDetailPopup({
   const isClosed = trade.status === "SETTLED";
   const entryPrice = parseFloat(trade.entryPrice);
   const entryFees = parseFloat(trade.entryFees || "0");
-  const exitFees = parseFloat(trade.exitFees || "0");
-  const totalFees = entryFees + exitFees;
   const pnl = parseFloat(trade.realizedPnl || "0");
   const exitPrice = trade.exitPrice ? parseFloat(trade.exitPrice) : null;
   const btcAtEntry = trade.btcPriceAtEntry
     ? parseFloat(trade.btcPriceAtEntry)
     : null;
-  const maxProfit = trade.maxUnrealizedProfit
-    ? parseFloat(trade.maxUnrealizedProfit)
+  const btcTarget = trade.btcTargetPrice
+    ? parseFloat(trade.btcTargetPrice)
     : null;
-  const maxLoss = trade.maxUnrealizedLoss
-    ? parseFloat(trade.maxUnrealizedLoss)
+  const btcDist = trade.btcDistanceUsd
+    ? parseFloat(trade.btcDistanceUsd)
     : null;
   const minPrice = trade.minPriceDuringPosition
     ? parseFloat(trade.minPriceDuringPosition)
@@ -46,12 +44,13 @@ export function TradeDetailPopup({
   const budget = parseFloat(trade.positionBudget);
   const actualCost = parseFloat(trade.actualCost);
 
-
+  const windowLabel = trade.windowType
+    ? (MARKET_WINDOW_LABELS[trade.windowType as MarketWindow] ??
+      trade.windowType)
+    : null;
 
   const outcome = trade.exitOutcome;
   const isWin = outcome === "WIN";
-
-  const grossPnl = exitPrice !== null ? (exitPrice - entryPrice) * shares : 0;
 
   const polyUrl =
     (marketSlug ?? trade.marketSlug)
@@ -92,7 +91,10 @@ export function TradeDetailPopup({
               >
                 {isClosed ? (outcome ?? "SETTLED") : "OPEN"}
               </span>
-
+              {windowLabel && <Chip>{windowLabel}</Chip>}
+              {trade.marketCategory && (
+                <Chip>{trade.marketCategory.toUpperCase()}</Chip>
+              )}
               {trade.outcomeLabel && <Chip>{trade.outcomeLabel}</Chip>}
             </div>
 
@@ -136,7 +138,7 @@ export function TradeDetailPopup({
             className={`shrink-0 flex items-center justify-between gap-4 px-4 py-2.5 border-b border-border/20 ${pnl >= 0 ? "bg-emerald-500/[0.035]" : "bg-red-500/[0.035]"}`}
           >
             <div className="flex items-baseline gap-2">
-              <Label>NET P&L</Label>
+              <Label>P&L</Label>
               <span
                 className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnlColor(pnl)}`}
               >
@@ -187,8 +189,9 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              <Cell label="COST" value={`$${actualCost.toFixed(2)}`} />
-              <Cell label="FEES" value={`$${totalFees.toFixed(4)}`} />
+              <Cell label="BUDGET" value={`$${budget.toFixed(4)}`} />
+              <Cell label="ACTUAL COST" value={`$${actualCost.toFixed(4)}`} />
+              <Cell label="ENTRY FEES" value={`$${entryFees.toFixed(6)}`} />
               <Cell
                 label="FILL STATUS"
                 value={
@@ -205,12 +208,6 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              {isClosed && (
-                <Cell 
-                  label="GROSS P&L" 
-                  value={<span className={pnlColor(grossPnl)}>{formatPnl(grossPnl)}</span>} 
-                />
-              )}
               {/* Min price spans full width when present */}
               {minPrice !== null && minPrice > 0 && minPrice < entryPrice && (
                 <div className="col-span-2 flex items-center justify-between py-2 px-4 border-t border-border/10 bg-amber-500/[0.03]">
@@ -228,23 +225,99 @@ export function TradeDetailPopup({
             </Row2>
           </Section>
 
-          {/* ── MARKET CONTEXT ── */}
-          {(btcAtEntry !== null || maxProfit !== null || maxLoss !== null) && (
-            <Section title="MARKET CONTEXT">
+          {/* ── BTC CONTEXT ── */}
+          {(btcAtEntry !== null ||
+            (btcTarget !== null && btcTarget > 0) ||
+            (btcDist !== null && btcDist > 0) ||
+            trade.momentumDirection ||
+            trade.crossovers) && (
+            <Section title="BTC CONTEXT">
               <Row2>
                 {btcAtEntry !== null && (
-                  <Cell label="BTC AT ENTRY" value={fmtBtc(btcAtEntry)} />
+                  <Cell label="AT ENTRY" value={fmtBtc(btcAtEntry)} />
                 )}
-                {maxProfit !== null && (
-                  <Cell 
-                    label="MAX UNREALIZED PNL" 
-                    value={<span className="text-emerald-400">+{formatPnl(maxProfit)}</span>} 
+                {btcTarget !== null && btcTarget > 0 && (
+                  <Cell label="TARGET" value={fmtBtc(btcTarget)} />
+                )}
+                {btcDist !== null && btcDist > 0 && (
+                  <Cell label="DISTANCE" value={`$${btcDist.toFixed(2)}`} />
+                )}
+                {trade.momentumDirection && (
+                  <Cell
+                    label="MOMENTUM"
+                    value={
+                      <span
+                        className={
+                          trade.momentumDirection === "UP"
+                            ? "text-emerald-400"
+                            : trade.momentumDirection === "DOWN"
+                              ? "text-red-400"
+                              : "text-foreground/60"
+                        }
+                      >
+                        {trade.momentumDirection}
+                        {trade.momentumChangeUsd && (
+                          <span className="text-muted-foreground/40 ml-2 font-mono">
+                            $
+                            {Math.abs(
+                              parseFloat(trade.momentumChangeUsd),
+                            ).toFixed(0)}
+                          </span>
+                        )}
+                      </span>
+                    }
                   />
                 )}
-                {maxLoss !== null && (
-                  <Cell 
-                    label="MAX UNREALIZED LOSS" 
-                    value={<span className="text-red-400">{formatPnl(maxLoss)}</span>} 
+                {trade.crossovers && (
+                  <Cell
+                    label="WINDOW CROSSOVERS"
+                    value={
+                      <span
+                        className="cursor-help"
+                        title={
+                          trade.crossovers.details.length > 0
+                            ? trade.crossovers.details
+                                .map(
+                                  (c) =>
+                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
+                                )
+                                .join(" | ")
+                            : "None"
+                        }
+                      >
+                        {trade.crossovers.all}
+                      </span>
+                    }
+                  />
+                )}
+                {trade.crossovers && (
+                  <Cell
+                    label="CROSSOVERS BEFORE ENTRY"
+                    value={
+                      <span
+                        className="cursor-help"
+                        title={
+                          trade.crossovers.details.filter(
+                            (c) =>
+                              c.ts >= new Date(trade.entryTs).getTime() - 60000,
+                          ).length > 0
+                            ? trade.crossovers.details
+                                .filter(
+                                  (c) =>
+                                    c.ts >=
+                                    new Date(trade.entryTs).getTime() - 60000,
+                                )
+                                .map(
+                                  (c) =>
+                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
+                                )
+                                .join(" | ")
+                            : "None"
+                        }
+                      >
+                        {trade.crossovers.last60s}
+                      </span>
+                    }
                   />
                 )}
               </Row2>

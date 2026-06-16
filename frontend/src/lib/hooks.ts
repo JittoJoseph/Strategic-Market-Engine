@@ -665,8 +665,8 @@ function auditLogToActivity(log: AuditLog): ActivityEntry {
   else if (cat.includes("TRADE_OPENED")) kind = "TRADE_OPENED";
   else if (cat.includes("TRADE_FORCE") || cat.includes("LOSS"))
     kind = "TRADE_LOSS";
-  else if (cat.includes("SKIP"))
-    kind = "INFO";
+  else if (cat.includes("SKIP") || cat.includes("MOMENTUM"))
+    kind = "MOMENTUM_SKIP";
   else if (cat.includes("MARKET")) kind = "MARKET_RESOLVED";
   else if (log.level === "warn") kind = "WARN";
   else if (log.level === "error") kind = "ERROR";
@@ -750,11 +750,14 @@ export function useActivityLog() {
       const btc = trade.btcPriceAtEntry
         ? ` BTC $${parseFloat(trade.btcPriceAtEntry).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
         : "";
+      const momentum = (trade as any).momentum;
+      const momStr = momentum ? ` mom:${momentum.direction}` : "";
+
       const entry: ActivityEntry = {
         id,
         kind: "TRADE_OPENED",
         title: "TRADE OPENED",
-        detail: `${outcome} ${price}${btc} — $${trade.actualCost}`,
+        detail: `${outcome} ${price}${btc}${momStr} — $${trade.actualCost}`,
         ts: Date.now(),
         trade,
       };

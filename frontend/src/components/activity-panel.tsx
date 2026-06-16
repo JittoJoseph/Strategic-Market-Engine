@@ -22,7 +22,11 @@ const KIND_META: Record<
     badge: "bg-red-500/10 text-red-400 border-red-500/20",
     label: "LOSS",
   },
-
+  MOMENTUM_SKIP: {
+    dot: "bg-amber-400",
+    badge: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+    label: "SKIPPED",
+  },
   MARKET_RESOLVED: {
     dot: "bg-purple-400",
     badge: "bg-purple-500/10 text-purple-400 border-purple-500/20",

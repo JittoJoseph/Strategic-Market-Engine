@@ -19,7 +19,6 @@ export function Header() {
   const navItems = [
     { href: "/", label: "DASHBOARD" },
     { href: "/analysis", label: "ANALYSIS" },
-    { href: "/settings", label: "SETTINGS" },
   ];
 
   // Don't render time until after hydration to prevent mismatch

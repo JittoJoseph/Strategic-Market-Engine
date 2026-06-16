@@ -62,6 +62,7 @@ export async function insertMarketIfNew(
     endDate?: string | null;
     targetPrice?: number | null;
     active?: boolean;
+    metadata?: unknown;
   },
 ): Promise<boolean> {
   const database = getDb();
@@ -78,6 +79,7 @@ export async function insertMarketIfNew(
     endDate: data.endDate || null,
     targetPrice: data.targetPrice?.toString() ?? null,
     active: data.active ?? true,
+    metadata: data.metadata as any,
   };
 
   const result = await database
@@ -116,6 +118,8 @@ export async function loadOpenTradesWithMarkets() {
 export async function createSimulatedTrade(data: {
   marketId?: string;
   tokenId: string;
+  marketCategory?: string;
+  windowType?: string;
   outcomeLabel?: string;
   entryTs: Date;
   entryPrice: string;
@@ -124,10 +128,13 @@ export async function createSimulatedTrade(data: {
   actualCost: string;
   entryFees?: string;
   fillStatus?: string;
-  orderType?: string;
   btcPriceAtEntry?: number;
-  maxUnrealizedProfit?: string;
-  maxUnrealizedLoss?: string;
+  btcTargetPrice?: number;
+  btcDistanceUsd?: number;
+  momentumDirection?: string;
+  momentumChangeUsd?: number;
+  orderbookSnapshot?: unknown;
+  raw?: unknown;
 }) {
   const database = getDb();
   const result = await database
@@ -135,8 +142,10 @@ export async function createSimulatedTrade(data: {
     .values({
       marketId: data.marketId || null,
       tokenId: data.tokenId,
+      marketCategory: data.marketCategory || null,
+      windowType: data.windowType || null,
       side: "BUY",
-      orderType: data.orderType || "FAK",
+      orderType: "FAK",
       outcomeLabel: data.outcomeLabel || null,
       entryTs: data.entryTs,
       entryPrice: data.entryPrice,
@@ -146,8 +155,12 @@ export async function createSimulatedTrade(data: {
       entryFees: data.entryFees ?? "0",
       fillStatus: data.fillStatus ?? "FULL",
       btcPriceAtEntry: data.btcPriceAtEntry?.toString() ?? null,
-      maxUnrealizedProfit: data.maxUnrealizedProfit ?? "0",
-      maxUnrealizedLoss: data.maxUnrealizedLoss ?? "0",
+      btcTargetPrice: data.btcTargetPrice?.toString() ?? null,
+      btcDistanceUsd: data.btcDistanceUsd?.toString() ?? null,
+      momentumDirection: data.momentumDirection || null,
+      momentumChangeUsd: data.momentumChangeUsd?.toString() ?? null,
+      orderbookSnapshot: data.orderbookSnapshot as any,
+      raw: data.raw as any,
       status: "OPEN",
     })
     .returning();
@@ -160,13 +173,13 @@ export async function resolveTrade(
   realizedPnl: string,
   exitPrice?: string,
   minPriceDuringPosition?: string,
-  maxUnrealizedProfit?: string,
-  maxUnrealizedLoss?: string,
   extras?: {
     exitReason?: "RESOLUTION" | "STOP_LOSS" | "TAKE_PROFIT" | "FORCE_TIMEOUT";
-    exitFees?: string;
     takeProfitTriggerPrice?: string;
     takeProfitTriggeredAt?: Date;
+    takeProfitExitPrice?: string;
+    takeProfitFees?: string;
+    takeProfitPnl?: string;
   },
 ) {
   const database = getDb();
@@ -182,12 +195,18 @@ export async function resolveTrade(
       status: "SETTLED",
       updatedAt: new Date(),
       ...(minPriceDuringPosition != null ? { minPriceDuringPosition } : {}),
-      ...(maxUnrealizedProfit != null ? { maxUnrealizedProfit } : {}),
-      ...(maxUnrealizedLoss != null ? { maxUnrealizedLoss } : {}),
-      exitReason: extras?.exitReason || null,
-      exitFees: extras?.exitFees || "0",
-      takeProfitTriggerPrice: extras?.takeProfitTriggerPrice || null,
-      takeProfitTriggeredAt: extras?.takeProfitTriggeredAt || null,
+      ...(extras?.exitReason ? { exitReason: extras.exitReason } : {}),
+      ...(extras?.takeProfitTriggerPrice
+        ? { takeProfitTriggerPrice: extras.takeProfitTriggerPrice }
+        : {}),
+      ...(extras?.takeProfitTriggeredAt
+        ? { takeProfitTriggeredAt: extras.takeProfitTriggeredAt }
+        : {}),
+      ...(extras?.takeProfitExitPrice
+        ? { takeProfitExitPrice: extras.takeProfitExitPrice }
+        : {}),
+      ...(extras?.takeProfitFees ? { takeProfitFees: extras.takeProfitFees } : {}),
+      ...(extras?.takeProfitPnl ? { takeProfitPnl: extras.takeProfitPnl } : {}),
     })
     .where(eq(schema.simulatedTrades.id, id))
     .returning();

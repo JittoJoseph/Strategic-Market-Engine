@@ -12,7 +12,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
 import { pnlColor, formatPnl } from "@/lib/utils";
-import NumberFlow from "@number-flow/react";
 import {
   useTrades,
   useSystemStats,
@@ -52,7 +51,13 @@ export function DashboardPage() {
     price: number;
     timestamp: number;
   } | null>(null);
-
+  // Real-time momentum driven by btcPriceUpdate WS (falls back to stats on initial load)
+  const [momentum, setMomentum] = useState<{
+    direction: "UP" | "DOWN" | "NEUTRAL";
+    changeUsd: number;
+    lookbackMs: number;
+    hasData: boolean;
+  } | null>(null);
 
   // Data hooks — trades are WS-driven; no polling
   const {
@@ -85,6 +90,9 @@ export function DashboardPage() {
       if (d?.price && typeof d.price === "number") {
         setBtcPrice({ price: d.price, timestamp: d.timestamp ?? Date.now() });
       }
+      if (d?.momentum) {
+        setMomentum(d.momentum);
+      }
     }, []),
   );
 
@@ -97,8 +105,12 @@ export function DashboardPage() {
         if (d?.btcPrice && typeof d.btcPrice === "object") {
           setBtcPrice(d.btcPrice);
         }
+        // Only seed momentum from systemState if we don't have a live value yet
+        if (d?.momentum && !momentum) {
+          setMomentum(d.momentum);
+        }
       },
-      [],
+      [momentum],
     ),
   );
 
@@ -323,6 +335,30 @@ export function DashboardPage() {
                     value={stats.orchestrator.btcConnected ? "LIVE" : "OFFLINE"}
                     accent={stats.orchestrator.btcConnected}
                   />
+                  {/* Use live WS-driven momentum (updates every BTC tick ~1s) */}
+                  {(momentum ?? stats.orchestrator.momentum) && (
+                    <StatRow
+                      label="Momentum"
+                      value={`${
+                        (momentum ?? stats.orchestrator.momentum)!.direction
+                      } ${
+                        (momentum ?? stats.orchestrator.momentum)!.changeUsd >=
+                        0
+                          ? "+"
+                          : ""
+                      }$${Math.abs(
+                        (momentum ?? stats.orchestrator.momentum)!.changeUsd,
+                      ).toFixed(0)}`}
+                      accent={
+                        (momentum ?? stats.orchestrator.momentum)!.direction ===
+                        "UP"
+                      }
+                      warn={
+                        (momentum ?? stats.orchestrator.momentum)!.direction ===
+                        "DOWN"
+                      }
+                    />
+                  )}
                 </div>
               ) : null}
             </SidebarCard>
@@ -331,8 +367,8 @@ export function DashboardPage() {
               {stats?.config ? (
                 <div className="space-y-2 text-xs font-mono">
                   <StatRow
-                    label="Entry Max Price"
-                    value={`${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
+                    label="Entry Range"
+                    value={`${(stats.config.entryPriceThreshold * 100).toFixed(0)}–${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
                   />
                   <StatRow
                     label="Trade Window"
@@ -347,18 +383,46 @@ export function DashboardPage() {
                     value={stats.config.maxPositions?.toString() ?? "—"}
                   />
                   <StatRow
-                    label="Allocation"
-                    value={`$${stats.config.allocationPerSplit} / split`}
+                    label="BTC Min Dist"
+                    value={`$${stats.config.minBtcDistanceUsd}`}
+                  />
+                  <StatRow
+                    label="Momentum Filter"
+                    value={
+                      stats.config.momentumEnabled
+                        ? `$${stats?.config?.momentumMinChangeUsd}`
+                        : "DISABLED"
+                    }
+                  />
+                  <StatRow
+                    label="Oscillation Filter"
+                    value={
+                      stats?.config?.oscillationFilterEnabled
+                        ? `${stats?.config?.oscillationMaxCrossovers} times`
+                        : "DISABLED"
+                    }
                   />
                   <StatRow
                     label="Stop Loss"
-                    value={`${(stats.config.stopLossPercent * 100).toFixed(0)}%`}
-                    accent={true}
+                    value={
+                      stats.config.stopLossEnabled
+                        ? `${(stats.config.stopLossPriceTrigger * 100).toFixed(0)}¢ trigger`
+                        : "DISABLED"
+                    }
+                    accent={stats.config.stopLossEnabled}
+                    warn={!stats.config.stopLossEnabled}
                   />
                   <StatRow
                     label="Take Profit"
-                    value={`${(stats.config.takeProfitPercent * 100).toFixed(0)}%`}
-                    accent={true}
+                    value={
+                      stats.config.takeProfitEnabled
+                        ? stats.config.takeProfitTriggerPrice != null
+                          ? `${(stats.config.takeProfitTriggerPrice * 100).toFixed(0)}¢ trigger`
+                          : "ENABLED"
+                        : "DISABLED"
+                    }
+                    accent={!!stats.config.takeProfitEnabled}
+                    warn={!stats.config.takeProfitEnabled}
                   />
                   <StatRow
                     label="Risk Guard"
@@ -404,6 +468,8 @@ export function DashboardPage() {
       <MarketDetailModal
         market={selectedMarket}
         trades={trades}
+        oscillationWindowMs={stats?.config?.oscillationWindowMs ?? 60_000}
+        oscillationMaxCrossovers={stats?.config?.oscillationMaxCrossovers ?? 3}
         open={selectedMarket !== null}
         onClose={() => setSelectedMarket(null)}
       />
@@ -503,7 +569,8 @@ function TopDashboardSection({
   const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
   const gainFromInitial = portfolioValue - initialCapital;
-  const mainDisplayValue = gainFromInitial;
+  const animatedGainFromInitial = useAnimatedNumber(gainFromInitial, 300);
+  const mainDisplayValue = animatedGainFromInitial;
   const windowType = stats?.config?.marketWindow || "5M";
 
   // Effective BTC price at window start: use captured value or fall back to entry price from trade
@@ -787,18 +854,13 @@ function TopDashboardSection({
                 <div
                   className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${pnlColor(mainDisplayValue)}`}
                 >
-                  <NumberFlow 
-                    value={mainDisplayValue} 
-                    format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
-                  />
+                  {formatPnl(mainDisplayValue)}
                 </div>
                 <div
                   className={`text-xs font-mono mt-1 ${pnlColor(roi, "70")}`}
                 >
-                  <NumberFlow 
-                    value={roi / 100} 
-                    format={{ style: 'percent', signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 }}
-                  /> ROI
+                  {roi >= 0 ? "+" : ""}
+                  {roi.toFixed(2)}% ROI
                 </div>
               </div>
               <div className="space-y-3 pt-1">
@@ -809,10 +871,7 @@ function TopDashboardSection({
                   <div
                     className={`text-sm font-bold font-mono tabular-nums ${pnlColor(unrealizedPnl)}`}
                   >
-                    <NumberFlow 
-                      value={unrealizedPnl} 
-                      format={{ style: 'currency', currency: 'USD', signDisplay: 'always', minimumFractionDigits: 4, maximumFractionDigits: 4 }}
-                    />
+                    {formatPnl(unrealizedPnl)}
                   </div>
                 </div>
                 <div>
@@ -820,7 +879,7 @@ function TopDashboardSection({
                     INITIAL CAPITAL
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    <NumberFlow value={initialCapital} format={{ style: 'currency', currency: 'USD' }} />
+                    ${initialCapital.toFixed(2)}
                   </div>
                 </div>
                 <div>
@@ -828,7 +887,7 @@ function TopDashboardSection({
                     CURRENT VALUE
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    <NumberFlow value={portfolioValue} format={{ style: 'currency', currency: 'USD' }} />
+                    ${portfolioValue.toFixed(2)}
                   </div>
                 </div>
               </div>
@@ -841,10 +900,11 @@ function TopDashboardSection({
                   PORTFOLIO VALUE
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-foreground">
-                  <NumberFlow value={portfolioValue} format={{ style: 'currency', currency: 'USD' }} />
+                  ${portfolioValue.toFixed(2)}
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5 flex gap-1">
-                  cash <NumberFlow value={cashBalance} format={{ style: 'currency', currency: 'USD' }} /> + positions <NumberFlow value={openPositionsValue} format={{ style: 'currency', currency: 'USD' }} />
+                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
+                  cash ${cashBalance.toFixed(2)} + positions $
+                  {openPositionsValue.toFixed(2)}
                 </div>
               </div>
 

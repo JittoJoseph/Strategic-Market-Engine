@@ -21,9 +21,9 @@ import {
   getStrategyEngine,
   StrategyEngine,
   type MarketOpportunity,
+  type Crossover,
 } from "./strategy-engine.js";
 import {
-  simulateSplit,
   simulateLimitBuy,
   simulateLimitSell,
   calculateWinProfit,
@@ -76,8 +76,6 @@ interface OpenPosition {
   stopLossTriggered?: boolean;
   /** Prevents concurrent take-profit execution for the same position */
   takeProfitTriggered?: boolean;
-  maxPriceDuringPosition: number;
-  resolving?: boolean;
 }
 
 /**
@@ -153,7 +151,7 @@ export class MarketOrchestrator extends EventEmitter {
       {
         window: config.strategy.marketWindow,
         label: windowLabel,
-        allocationPerSplit: config.strategy.allocationPerSplit,
+        threshold: config.strategy.entryPriceThreshold,
         tradeWindowSec: config.strategy.tradeFromWindowSeconds,
         maxPositions: config.strategy.maxSimultaneousPositions,
         startingCapital: config.portfolio.startingCapital,
@@ -255,7 +253,12 @@ export class MarketOrchestrator extends EventEmitter {
 
   getStats() {
     const config = getConfig();
-    const momentum = null;
+    const momentum = config.strategy.momentumEnabled
+      ? this.btcWatcher.getMomentum(
+          config.strategy.momentumLookbackMs,
+          config.strategy.momentumMinChangeUsd,
+        )
+      : null;
     return {
       running: this.running,
       paused: this.paused,
@@ -506,7 +509,11 @@ export class MarketOrchestrator extends EventEmitter {
           : "btcPriceAtWindowStart filled (historical)",
       );
 
-
+      // For relative Up/Down markets the window-start price is the target.
+      if (state.targetPrice === null) {
+        this.strategyEngine.updateTargetPrice(state.yesTokenId, resolved);
+        this.strategyEngine.updateTargetPrice(state.noTokenId, resolved);
+      }
     }
   }
 
@@ -582,6 +589,7 @@ export class MarketOrchestrator extends EventEmitter {
         tokenIds[i]!,
         outcomes[i] ?? `Outcome${i}`,
         endDate,
+        effectiveTargetPrice,
       );
     }
 
@@ -630,21 +638,29 @@ export class MarketOrchestrator extends EventEmitter {
       if (state && state.endDate > new Date()) {
         for (const tradeId of tradeIds) {
           const pos = this.openPositions.get(tradeId);
-          if (pos) {
-            if (bestBid < pos.minPriceDuringPosition) {
-              pos.minPriceDuringPosition = bestBid;
-            }
-            if (bestBid > pos.maxPriceDuringPosition) {
-              pos.maxPriceDuringPosition = bestBid;
-            }
+          if (pos && bestBid < pos.minPriceDuringPosition) {
+            pos.minPriceDuringPosition = bestBid;
           }
         }
       }
     }
 
     const config = getConfig();
+    const momentumSignal = config.strategy.momentumEnabled
+      ? this.btcWatcher.getMomentum(
+          config.strategy.momentumLookbackMs,
+          config.strategy.momentumMinChangeUsd,
+        )
+      : null;
 
-    this.strategyEngine.evaluatePrice(tokenId, bestBid, bestAsk, this.btcWatcher.getCurrentPrice());
+    this.strategyEngine.evaluatePrice(
+      tokenId,
+      bestBid,
+      bestAsk,
+      this.btcWatcher.getCurrentPrice(),
+      momentumSignal,
+    );
+
     this.checkStopLoss(tokenId, bestBid);
     this.checkTakeProfit(tokenId, bestBid);
   }
@@ -707,143 +723,222 @@ export class MarketOrchestrator extends EventEmitter {
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
     if (this.paused) return;
 
-    const marketState = this.activeMarkets.get(opp.marketId);
-    if (!marketState) return;
-
-    // Check if we've already split this market (if we hold either token)
-    const hasYes =
-      this.positionsByToken.has(marketState.yesTokenId) &&
-      this.positionsByToken.get(marketState.yesTokenId)!.size > 0;
-    const hasNo =
-      this.positionsByToken.has(marketState.noTokenId) &&
-      this.positionsByToken.get(marketState.noTokenId)!.size > 0;
-    
-    if (hasYes || hasNo) {
-      return; // Already split / have positions
-    }
-
-    // In-flight tracking by marketId
-    if (this.inFlightTokenIds.has(opp.marketId)) {
+    // Guard against concurrent executions for the same token
+    if (this.inFlightTokenIds.has(opp.tokenId)) {
+      logger.debug(
+        { tokenId: opp.tokenId, marketId: opp.marketId },
+        "onOpportunity skipped — already in-flight for this token",
+      );
       return;
     }
-    this.inFlightTokenIds.add(opp.marketId);
+    this.inFlightTokenIds.add(opp.tokenId);
 
     const config = getConfig();
 
     try {
-      const splitAmount = config.strategy.allocationPerSplit;
-
-      // Enforce portfolio cash
-      const cash = this.portfolioManager.getCashBalance();
-      if (cash < splitAmount) {
-        logger.info(
-          { cash, required: splitAmount },
-          "Insufficient cash for split",
+      // ── 1. Fetch live orderbook first (need depth for realistic fill) ──
+      const orderbookResult = await this.client.getOrderbook(opp.tokenId);
+      if (!orderbookResult?.data || !orderbookResult.data.asks?.length) {
+        logger.warn(
+          { tokenId: opp.tokenId },
+          "No orderbook available — will retry on next price update",
         );
-        return; // Will try again next tick if we don't clear evaluated, actually we want to clear it so it retries
+        this.strategyEngine.clearEvaluated(opp.tokenId);
+        return;
+      }
+      const orderbook = orderbookResult.data;
+
+      // Extract best ask from the live orderbook (sorted ascending)
+      const sortedAsks = [...orderbook.asks].sort(
+        (a, b) => parseFloat(a.price) - parseFloat(b.price),
+      );
+      const bestAskPrice =
+        sortedAsks.length > 0 ? parseFloat(sortedAsks[0]!.price) : opp.bestAsk;
+
+      // ── 2. Compute position budget (sized at maxEntryPrice) ──────────
+      const openPositionsValue = this.computeOpenPositionsValue();
+      const positionBudget =
+        this.portfolioManager.computePositionBudget(openPositionsValue);
+
+      if (positionBudget <= 0) {
+        logger.info(
+          {
+            openPositionsValue,
+            cash: this.portfolioManager.getCashBalance(),
+          },
+          "Insufficient cash for minimum share count — skipping",
+        );
+        return;
       }
 
-      // Simulate split
-      const execution = simulateSplit(splitAmount);
+      // ── 3. Simulate FAK buy — walk asks, respect depth at each level ──
+      const execution = simulateLimitBuy(
+        orderbook,
+        positionBudget,
+        config.strategy.maxEntryPrice,
+      );
 
-      const deducted = await this.portfolioManager.deductCash(splitAmount);
-      if (!deducted) {
+      if (execution.totalShares <= 0) {
+        logger.warn(
+          {
+            tokenId: opp.tokenId,
+            maxEntryPrice: config.strategy.maxEntryPrice,
+            bestAsk: bestAskPrice,
+          },
+          "No fill — all asks above maxEntryPrice; will retry",
+        );
         this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
 
-      const entryTs = new Date();
-
-      // Create trades for both sides
-      const tokens = [
-        { id: marketState.yesTokenId, label: marketState.outcomes[0] || "Yes" },
-        { id: marketState.noTokenId, label: marketState.outcomes[1] || "No" },
-      ];
-
-      for (const token of tokens) {
-        const tradeRow = await createSimulatedTrade({
-          marketId: opp.marketId,
-          tokenId: token.id,
-          outcomeLabel: token.label,
-          orderType: "SPLIT",
-          entryTs,
-          entryPrice: execution.averagePrice.toFixed(6),
-          entryShares: execution.totalShares.toFixed(6),
-          positionBudget: execution.totalCost.toFixed(6),
-          actualCost: execution.netCost.toFixed(6),
-          entryFees: "0",
-          fillStatus: "FULL",
-          btcPriceAtEntry: opp.btcPrice ?? undefined,
-          maxUnrealizedProfit: "0",
-          maxUnrealizedLoss: "0",
-        });
-
-        const tradeId = tradeRow!.id;
-
-        this.trackPosition({
-          tradeId,
-          marketId: opp.marketId,
-          tokenId: token.id,
-          outcomeLabel: token.label,
-          entryPrice: execution.averagePrice,
-          entryShares: execution.totalShares,
-          fees: 0,
-          actualCost: execution.netCost,
-          marketEndDate: marketState.endDate,
-          minPriceDuringPosition: execution.averagePrice,
-          maxPriceDuringPosition: execution.averagePrice,
-          stopLossTriggered: false,
-          takeProfitTriggered: false,
-          resolving: false,
-        });
-
-        this.emit("tradeOpened", {
-          tradeId,
-          trade: tradeRow,
-          ...opp, // pass through opportunity data
-          tokenId: token.id,
-          outcomeLabel: token.label,
-          execution,
-          expectedProfit: 0, // Initial PnL is 0 for split
-        });
+      // ── 4. Enforce Polymarket's min_order_size ────────────────────
+      if (execution.belowMinimumOrderSize) {
+        logger.warn(
+          {
+            tokenId: opp.tokenId,
+            filled: execution.totalShares,
+            minOrderSize: execution.minOrderSize,
+          },
+          `Rejecting: filled ${execution.totalShares.toFixed(2)} shares < min_order_size ${execution.minOrderSize}`,
+        );
+        this.strategyEngine.clearEvaluated(opp.tokenId);
+        return;
       }
 
+      const expectedProfit = calculateWinProfit(
+        execution.averagePrice,
+        execution.totalShares,
+        execution.fees,
+      );
+
+      if (expectedProfit < 0.001) {
+        logger.debug(
+          { expectedProfit, tokenId: opp.tokenId },
+          "Expected profit too small",
+        );
+        return;
+      }
+
+      // ── 5. Deduct actual cost from cash ─────────────────────────
+      const actualCost = execution.netCost;
+      const deducted = await this.portfolioManager.deductCash(actualCost);
+      if (!deducted) {
+        logger.warn(
+          { actualCost, cash: this.portfolioManager.getCashBalance() },
+          "Insufficient cash for actual fill cost — skipping",
+        );
+        return;
+      }
+
+      // ── Capture momentum context ─────────────────────────────
+      const momentum = config.strategy.momentumEnabled
+        ? this.btcWatcher.getMomentum(
+            config.strategy.momentumLookbackMs,
+            config.strategy.momentumMinChangeUsd,
+          )
+        : null;
+
+      // Determine fill status for audit
+      const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
+
+      const entryTs = new Date();
+      const tradeRow = await createSimulatedTrade({
+        marketId: opp.marketId,
+        tokenId: opp.tokenId,
+        outcomeLabel: opp.outcomeLabel,
+        entryTs,
+        windowType: config.strategy.marketWindow,
+        entryPrice: execution.averagePrice.toFixed(6),
+        entryShares: execution.totalShares.toFixed(6),
+        positionBudget: positionBudget.toFixed(6),
+        actualCost: actualCost.toFixed(6),
+        entryFees: execution.fees.toFixed(6),
+        fillStatus,
+        btcPriceAtEntry: opp.btcPrice,
+        btcTargetPrice: opp.btcTargetPrice,
+        btcDistanceUsd: opp.btcDistanceUsd,
+        momentumDirection: momentum?.direction ?? undefined,
+        momentumChangeUsd: momentum ? Math.abs(momentum.changeUsd) : undefined,
+        orderbookSnapshot: execution.orderbookSnapshot,
+      });
+      const tradeId = tradeRow!.id;
+
+      // Track open position
+      const market = this.activeMarkets.get(opp.marketId);
+      this.trackPosition({
+        tradeId,
+        marketId: opp.marketId,
+        tokenId: opp.tokenId,
+        outcomeLabel: opp.outcomeLabel,
+        entryPrice: execution.averagePrice,
+        entryShares: execution.totalShares,
+        fees: execution.fees,
+        actualCost,
+        marketEndDate: market?.endDate ?? new Date(),
+        minPriceDuringPosition: execution.averagePrice, // start at entry
+      });
+
       this.scheduleResolutionMonitor(opp.marketId);
-      this.cycleCount++;
 
       await logAudit(
         "info",
         "TRADE_OPENED",
-        `Split executed for market ${opp.marketId}`,
+        `Trade ${tradeId} opened for ${opp.outcomeLabel}`,
         {
-          marketId: opp.marketId,
-          allocation: splitAmount,
-          sharesPerSide: execution.totalShares,
+          tradeId,
+          tokenId: opp.tokenId,
+          outcome: opp.outcomeLabel,
+          avgPrice: execution.averagePrice,
+          shares: execution.totalShares,
+          positionBudget,
+          actualCost,
+          expectedProfit,
+          btcPrice: opp.btcPrice,
+          btcTarget: opp.btcTargetPrice,
+          btcDistance: opp.btcDistanceUsd,
+          secondsToEnd: opp.secondsToEnd,
           cashRemaining: this.portfolioManager.getCashBalance(),
         },
       );
 
+      this.cycleCount++;
+      this.emit("tradeOpened", {
+        tradeId,
+        trade: tradeRow,
+        ...opp,
+        execution,
+        expectedProfit,
+      });
+
       logger.info(
         {
+          tradeId,
           marketId: opp.marketId,
-          allocation: splitAmount.toFixed(2),
-          sharesPerSide: execution.totalShares.toFixed(2),
+          outcome: opp.outcomeLabel,
+          avgPrice: execution.averagePrice.toFixed(4),
+          shares: execution.totalShares.toFixed(2),
+          budget: positionBudget.toFixed(2),
+          actualCost: actualCost.toFixed(4),
+          fees: execution.fees.toFixed(4),
+          expectedProfit: expectedProfit.toFixed(4),
+          btcPrice: opp.btcPrice.toFixed(2),
+          btcDistance: opp.btcDistanceUsd.toFixed(2),
           cashRemaining: this.portfolioManager.getCashBalance().toFixed(2),
         },
-        "🔀 Market split executed",
+        "📈 Simulated trade opened",
       );
     } catch (error) {
       logger.error(
-        { error, marketId: opp.marketId },
-        "Failed to split market",
+        { error, marketId: opp.marketId, tokenId: opp.tokenId },
+        "Failed to execute simulated trade",
       );
       logAudit(
         "error",
         "SYSTEM",
-        `Failed to split market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to execute simulated trade for market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
     } finally {
-      this.inFlightTokenIds.delete(opp.marketId);
+      this.inFlightTokenIds.delete(opp.tokenId);
     }
   }
 
@@ -860,6 +955,7 @@ export class MarketOrchestrator extends EventEmitter {
    */
   private checkStopLoss(tokenId: string, bestBid: number): void {
     const config = getConfig();
+    if (!config.strategy.stopLossEnabled) return;
 
     const now = Date.now();
     const tradeIds = this.positionsByToken.get(tokenId);
@@ -868,24 +964,22 @@ export class MarketOrchestrator extends EventEmitter {
     for (const tradeId of tradeIds) {
       const pos = this.openPositions.get(tradeId);
       if (!pos) continue;
-      if (pos.stopLossTriggered || pos.takeProfitTriggered || pos.resolving) continue;
-      
-      // Calculate dynamic trigger price based on percentage
-      const stopLossTriggerPrice = pos.entryPrice * (1 + config.strategy.stopLossPercent);
-      
+      if (pos.stopLossTriggered) continue;
       // Critical guard: stop-loss must ONLY fire while the market window is open.
+      // After endDate, prices drift to ~0.50 during settlement — this would
+      // incorrectly trigger stop-loss on winning positions.
       if (pos.marketEndDate.getTime() <= now) continue;
 
-      if (bestBid <= stopLossTriggerPrice) {
+      if (bestBid < config.strategy.stopLossPriceTrigger) {
         pos.stopLossTriggered = true;
         logger.warn(
           {
             tradeId,
             tokenId,
             bestBid: bestBid.toFixed(4),
-            trigger: stopLossTriggerPrice,
+            trigger: config.strategy.stopLossPriceTrigger,
           },
-          `Stop-loss triggered: bid ${bestBid.toFixed(4)} <= ${stopLossTriggerPrice.toFixed(4)} trigger`,
+          `Stop-loss triggered: bid ${bestBid.toFixed(4)} < ${config.strategy.stopLossPriceTrigger} trigger`,
         );
         this.executeStopLoss(tradeId, pos, bestBid).catch((err) => {
           logger.error({ err, tradeId }, "Stop-loss execution failed");
@@ -903,6 +997,7 @@ export class MarketOrchestrator extends EventEmitter {
    */
   private checkTakeProfit(tokenId: string, bestBid: number): void {
     const config = getConfig();
+    if (!config.strategy.takeProfitEnabled) return;
 
     const now = Date.now();
     const tradeIds = this.positionsByToken.get(tokenId);
@@ -911,26 +1006,22 @@ export class MarketOrchestrator extends EventEmitter {
     for (const tradeId of tradeIds) {
       const pos = this.openPositions.get(tradeId);
       if (!pos) continue;
-      if (pos.stopLossTriggered || pos.takeProfitTriggered || pos.resolving) continue;
-      
-      // Calculate dynamic trigger price based on percentage
-      const takeProfitTriggerPrice = pos.entryPrice * (1 + config.strategy.takeProfitPercent);
-      
+      if (pos.stopLossTriggered || pos.takeProfitTriggered) continue;
       // Only fire while market window is open.
       if (pos.marketEndDate.getTime() <= now) continue;
 
-      if (bestBid >= takeProfitTriggerPrice) {
+      if (bestBid >= config.strategy.takeProfitTriggerPrice) {
         pos.takeProfitTriggered = true;
         logger.info(
           {
             tradeId,
             tokenId,
             bestBid: bestBid.toFixed(4),
-            trigger: takeProfitTriggerPrice,
+            trigger: config.strategy.takeProfitTriggerPrice,
           },
-          `Take-profit triggered: bid ${bestBid.toFixed(4)} >= ${takeProfitTriggerPrice.toFixed(4)} trigger`,
+          `Take-profit triggered: bid ${bestBid.toFixed(4)} >= ${config.strategy.takeProfitTriggerPrice} trigger`,
         );
-        this.executeTakeProfit(tradeId, pos, bestBid, takeProfitTriggerPrice).catch((err) => {
+        this.executeTakeProfit(tradeId, pos, bestBid).catch((err) => {
           logger.error({ err, tradeId }, "Take-profit execution failed");
           const position = this.openPositions.get(tradeId);
           if (position) position.takeProfitTriggered = false;
@@ -944,8 +1035,6 @@ export class MarketOrchestrator extends EventEmitter {
     pos: OpenPosition,
     triggerBid: number,
   ): Promise<void> {
-    if (pos.resolving) return;
-    pos.resolving = true;
     try {
       const orderbookResult = await this.client.getOrderbook(pos.tokenId);
 
@@ -962,8 +1051,9 @@ export class MarketOrchestrator extends EventEmitter {
           0, // accept any bid — full market sell
         );
 
-        exitPrice = sellResult.totalRevenue / pos.entryShares;
-        exitFees = sellResult.fees;
+        exitPrice =
+          sellResult.totalSharesSold > 0 ? sellResult.averagePrice : triggerBid;
+        exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
 
         if (sellResult.isPartialFill) {
           logger.warn(
@@ -972,7 +1062,7 @@ export class MarketOrchestrator extends EventEmitter {
               sold: sellResult.totalSharesSold,
               total: pos.entryShares,
             },
-            "Stop-loss partial fill — treating unsold shares as worthless",
+            "Stop-loss partial fill — insufficient bid liquidity",
           );
         }
       } else {
@@ -998,21 +1088,13 @@ export class MarketOrchestrator extends EventEmitter {
         await this.portfolioManager.addCash(sellProceeds);
       }
 
-      const maxUnrealizedProfit = (pos.maxPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-      const maxUnrealizedLoss = (pos.minPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-
       await resolveTrade(
         tradeId,
         outcome,
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         pos.minPriceDuringPosition.toFixed(8),
-        maxUnrealizedProfit.toFixed(6),
-        maxUnrealizedLoss.toFixed(6),
-        {
-          exitReason: "STOP_LOSS",
-          exitFees: exitFees.toFixed(6),
-        },
+        { exitReason: "STOP_LOSS" },
       );
       this.updateConsecutiveLossState(isWin);
       this.untrackPosition(tradeId);
@@ -1061,12 +1143,9 @@ export class MarketOrchestrator extends EventEmitter {
         "SYSTEM",
         `Stop-loss execution error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
-      // Reset flags to allow retry on next price tick
+      // Reset flag to allow retry on next price tick
       const position = this.openPositions.get(tradeId);
-      if (position) {
-        position.stopLossTriggered = false;
-        position.resolving = false;
-      }
+      if (position) position.stopLossTriggered = false;
     }
   }
 
@@ -1074,10 +1153,7 @@ export class MarketOrchestrator extends EventEmitter {
     tradeId: string,
     pos: OpenPosition,
     triggerBid: number,
-    takeProfitTriggerPrice: number,
   ): Promise<void> {
-    if (pos.resolving) return;
-    pos.resolving = true;
     try {
       const config = getConfig();
       const orderbookResult = await this.client.getOrderbook(pos.tokenId);
@@ -1090,8 +1166,12 @@ export class MarketOrchestrator extends EventEmitter {
         const sellResult = simulateLimitSell(
           orderbookResult.data,
           pos.entryShares,
-          takeProfitTriggerPrice, // Protect against massive slippage
+          0, // accept any bid
         );
+
+        exitPrice =
+          sellResult.totalSharesSold > 0 ? sellResult.averagePrice : triggerBid;
+        exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
 
         if (sellResult.isPartialFill) {
           logger.warn(
@@ -1100,15 +1180,9 @@ export class MarketOrchestrator extends EventEmitter {
               sold: sellResult.totalSharesSold,
               total: pos.entryShares,
             },
-            "Take-profit partial fill — insufficient bid liquidity at trigger price. Aborting.",
+            "Take-profit partial fill — insufficient bid liquidity",
           );
-          pos.takeProfitTriggered = false;
-          pos.resolving = false;
-          return;
         }
-
-        exitPrice = sellResult.averagePrice;
-        exitFees = sellResult.fees;
       } else {
         exitPrice = triggerBid;
       }
@@ -1127,22 +1201,21 @@ export class MarketOrchestrator extends EventEmitter {
       if (sellProceeds > 0) {
         await this.portfolioManager.addCash(sellProceeds);
       }
-      const maxUnrealizedProfit = (pos.maxPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-      const maxUnrealizedLoss = (pos.minPriceDuringPosition - pos.entryPrice) * pos.entryShares;
 
-      const resolvedTrade = await resolveTrade(
+      await resolveTrade(
         tradeId,
         outcome,
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         pos.minPriceDuringPosition.toFixed(8),
-        maxUnrealizedProfit.toFixed(6),
-        maxUnrealizedLoss.toFixed(6),
         {
           exitReason: "TAKE_PROFIT",
-          exitFees: exitFees.toFixed(6),
-          takeProfitTriggerPrice: takeProfitTriggerPrice.toFixed(6),
+          takeProfitTriggerPrice:
+            config.strategy.takeProfitTriggerPrice.toFixed(6),
           takeProfitTriggeredAt: new Date(),
+          takeProfitExitPrice: exitPrice.toFixed(6),
+          takeProfitFees: exitFees.toFixed(6),
+          takeProfitPnl: pnl.toFixed(6),
         },
       );
       this.updateConsecutiveLossState(isWin);
@@ -1151,13 +1224,13 @@ export class MarketOrchestrator extends EventEmitter {
       await logAudit(
         "info",
         "TAKE_PROFIT",
-        `Take-profit executed for trade ${tradeId}: trigger ${takeProfitTriggerPrice.toFixed(4)} (bid ${triggerBid.toFixed(4)}) → exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
+        `Take-profit executed for trade ${tradeId}: trigger ${config.strategy.takeProfitTriggerPrice.toFixed(4)} (bid ${triggerBid.toFixed(4)}) → exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
         {
           tradeId,
           tokenId: pos.tokenId,
           entryPrice: pos.entryPrice,
           triggerBid,
-          triggerPrice: takeProfitTriggerPrice,
+          triggerPrice: config.strategy.takeProfitTriggerPrice,
           exitPrice,
           exitFees,
           pnl,
@@ -1174,7 +1247,7 @@ export class MarketOrchestrator extends EventEmitter {
           exitPrice: exitPrice.toFixed(4),
           pnl: pnl.toFixed(4),
           triggerBid: triggerBid.toFixed(4),
-          triggerPrice: takeProfitTriggerPrice.toFixed(4),
+          triggerPrice: config.strategy.takeProfitTriggerPrice.toFixed(4),
           classification: outcome,
         },
         "🎯 Take-profit sell executed",
@@ -1195,10 +1268,7 @@ export class MarketOrchestrator extends EventEmitter {
         `Take-profit execution error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
       const position = this.openPositions.get(tradeId);
-      if (position) {
-        position.takeProfitTriggered = false;
-        position.resolving = false;
-      }
+      if (position) position.takeProfitTriggered = false;
     }
   }
 
@@ -1322,8 +1392,6 @@ export class MarketOrchestrator extends EventEmitter {
   ): Promise<void> {
     for (const [tradeId, pos] of this.openPositions) {
       if (pos.marketId !== marketId) continue;
-      if (pos.resolving) continue;
-      pos.resolving = true;
 
       const isWin = pos.tokenId === winningTokenId;
       const exitPrice = isWin ? 1.0 : 0.0;
@@ -1338,17 +1406,12 @@ export class MarketOrchestrator extends EventEmitter {
         await this.portfolioManager.addCash(cashReturn);
       }
 
-      const maxUnrealizedProfit = (pos.maxPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-      const maxUnrealizedLoss = (pos.minPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-
       const resolvedTrade = await resolveTrade(
         tradeId,
         isWin ? "WIN" : "LOSS",
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         pos.minPriceDuringPosition.toFixed(8),
-        maxUnrealizedProfit.toFixed(6),
-        maxUnrealizedLoss.toFixed(6),
         { exitReason: "RESOLUTION" },
       );
 
@@ -1413,17 +1476,11 @@ export class MarketOrchestrator extends EventEmitter {
     }
 
     for (const [tradeId, pos] of remaining) {
-      if (pos.resolving) continue;
-      pos.resolving = true;
-
       const pnl = calculateLossAmount(
         pos.entryPrice,
         pos.entryShares,
         pos.fees,
       );
-
-      const maxUnrealizedProfit = (pos.maxPriceDuringPosition - pos.entryPrice) * pos.entryShares;
-      const maxUnrealizedLoss = (pos.minPriceDuringPosition - pos.entryPrice) * pos.entryShares;
 
       await resolveTrade(
         tradeId,
@@ -1431,8 +1488,6 @@ export class MarketOrchestrator extends EventEmitter {
         pnl.toFixed(6),
         "0",
         pos.minPriceDuringPosition.toFixed(8),
-        maxUnrealizedProfit.toFixed(6),
-        maxUnrealizedLoss.toFixed(6),
         { exitReason: "FORCE_TIMEOUT" },
       );
       this.updateConsecutiveLossState(false);
@@ -1542,16 +1597,15 @@ export class MarketOrchestrator extends EventEmitter {
         fees: parseFloat(trade.entryFees ?? "0"),
         actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
+        // Restore from DB if saved; otherwise start at entry price
         minPriceDuringPosition: parseFloat(
           trade.minPriceDuringPosition &&
             parseFloat(trade.minPriceDuringPosition) > 0
             ? trade.minPriceDuringPosition
             : trade.entryPrice,
         ),
-        maxPriceDuringPosition: parseFloat(trade.entryPrice), // Fallback if missing
         stopLossTriggered: false,
         takeProfitTriggered: false,
-        resolving: false,
       });
 
       // Set up resolution monitoring for existing positions
@@ -1652,6 +1706,7 @@ export class MarketOrchestrator extends EventEmitter {
           tokenIds[i]!,
           outcomes[i] ?? `Outcome${i}`,
           endDate,
+          effectiveTargetPrice,
         );
       }
 
@@ -1771,7 +1826,13 @@ export class MarketOrchestrator extends EventEmitter {
     // Safety: never clean up a market that still has open positions
     if (this.hasOpenPositionsForMarket(marketId)) return;
 
-
+    // Persist crossover data before unregistering (grab from either token — both track the same target)
+    const crossovers =
+      this.strategyEngine.getCrossoverData(state.yesTokenId) ??
+      this.strategyEngine.getCrossoverData(state.noTokenId);
+    if (crossovers && crossovers.length > 0) {
+      this.persistCrossoverData(marketId, crossovers);
+    }
 
     // Unsubscribe from WS
     if (state.subscribedWs) {
@@ -1792,6 +1853,32 @@ export class MarketOrchestrator extends EventEmitter {
     this.tokenToMarket.delete(state.noTokenId);
 
     this.activeMarkets.delete(marketId);
+  }
+
+  /**
+   * Persist crossover data to the market's metadata column.
+   * Fire-and-forget — failure is non-fatal.
+   */
+  private persistCrossoverData(
+    marketId: string,
+    crossovers: Crossover[],
+  ): void {
+    const db = getDb();
+    db.update(schema.markets)
+      .set({
+        metadata: sql`${schema.markets.metadata} || ${JSON.stringify({ crossovers })}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.markets.id, marketId))
+      .then(() =>
+        logger.debug(
+          { marketId, crossoverCount: crossovers.length },
+          "Persisted crossover data",
+        ),
+      )
+      .catch((err) =>
+        logger.debug({ err, marketId }, "Failed to persist crossover data"),
+      );
   }
 }
 

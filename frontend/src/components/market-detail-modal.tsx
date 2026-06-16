@@ -12,7 +12,8 @@ import {
 interface MarketDetailModalProps {
   market: DiscoveredMarket | null;
   trades: SimulatedTrade[];
-
+  oscillationWindowMs?: number;
+  oscillationMaxCrossovers?: number;
   open: boolean;
   onClose: () => void;
 }
@@ -30,7 +31,102 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+function CrossoverTimeline({
+  crossovers,
+  trades,
+  marketStart,
+  marketEnd,
+}: {
+  crossovers: Array<{ side: "UP" | "DOWN"; ts: number }>;
+  trades: SimulatedTrade[];
+  marketStart: number;
+  marketEnd: number;
+}) {
+  const duration = marketEnd - marketStart;
+  if (duration <= 0) return null;
 
+  // Sort crossovers by timestamp
+  const sortedCrossovers = [...crossovers].sort((a, b) => a.ts - b.ts);
+
+  const minuteMarkers = [];
+  const totalMinutes = Math.ceil(duration / (60 * 1000));
+  const maxMarkers = 6;
+  const stepMinutes = Math.max(1, Math.ceil(totalMinutes / (maxMarkers - 1)));
+
+  for (let minute = 0; minute <= totalMinutes; minute += stepMinutes) {
+    const timeMs = Math.min(marketStart + minute * 60 * 1000, marketEnd);
+    const position = ((timeMs - marketStart) / duration) * 100;
+    minuteMarkers.push({ minute, position });
+  }
+
+  if (minuteMarkers[minuteMarkers.length - 1]?.minute !== totalMinutes) {
+    minuteMarkers.push({ minute: totalMinutes, position: 100 });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="relative">
+        {/* Timeline background */}
+        <div className="relative h-12 bg-muted/20 rounded border">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full h-px bg-border/30"></div>
+          </div>
+
+          {/* Crossover points */}
+          {sortedCrossovers.map((crossover, i) => {
+            const position = ((crossover.ts - marketStart) / duration) * 100;
+            return (
+              <div
+                key={i}
+                className="absolute top-1/2 transform -translate-y-1/2 -translate-x-1/2"
+                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
+                title={`${crossover.side} crossover @ ${new Date(crossover.ts).toLocaleTimeString()}`}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    crossover.side === "UP"
+                      ? "bg-green-500/70"
+                      : "bg-red-500/70"
+                  } border border-white/50`}
+                />
+              </div>
+            );
+          })}
+
+          {/* Trade entry lines */}
+          {trades.map((trade, i) => {
+            const entryTime = new Date(trade.entryTs).getTime();
+            const position = ((entryTime - marketStart) / duration) * 100;
+            return (
+              <div
+                key={`trade-${i}`}
+                className="absolute top-0 bottom-0 w-px bg-blue-500/50"
+                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
+                title={`Trade entry @ ${new Date(trade.entryTs).toLocaleTimeString()}`}
+              />
+            );
+          })}
+        </div>
+
+        {/* Minute markers */}
+        <div className="relative mt-1 pb-4">
+          {minuteMarkers.map((marker, i) => (
+            <div
+              key={i}
+              className="absolute transform -translate-x-1/2"
+              style={{ left: `${marker.position}%` }}
+            >
+              <div className="w-px h-2 bg-border/50"></div>
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5 text-center font-mono">
+                {marker.minute}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Section({
   title,
@@ -110,16 +206,37 @@ function formatTimeAgo(endTime: number): string {
 export function MarketDetailModal({
   market,
   trades,
-
+  oscillationWindowMs = 60_000,
+  oscillationMaxCrossovers = 3,
   open,
   onClose,
 }: MarketDetailModalProps) {
   if (!market) return null;
 
   const isActive = market.computedStatus === "ACTIVE";
+  const windowLabel =
+    MARKET_WINDOW_LABELS[market.windowType as MarketWindow] ??
+    market.windowType;
   const polyUrl = polymarketMarketUrl(market);
+  const crossovers = market.metadata?.crossovers || [];
   const marketTrades = trades.filter((trade) => trade.marketId === market.id);
+  const windowDurationMs = getMarketWindowDurationMs(market.windowType);
+  const marketEndMs = market.endDate
+    ? new Date(market.endDate).getTime()
+    : Date.now();
+  const marketStartMs = marketEndMs - windowDurationMs;
 
+  // Calculate crossovers before entry for trades
+  const tradeCrossoverCounts = marketTrades.map((trade) => {
+    const entryTime = new Date(trade.entryTs).getTime();
+    const lookbackStart = entryTime - oscillationWindowMs;
+    const count = crossovers.filter(
+      (c) => c.ts >= lookbackStart && c.ts <= entryTime,
+    ).length;
+    return { trade, count };
+  });
+
+  const lookbackSeconds = Math.max(1, Math.round(oscillationWindowMs / 1000));
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -137,6 +254,7 @@ export function MarketDetailModal({
               >
                 {isActive ? "ACTIVE" : "ENDED"}
               </span>
+              <Chip>{windowLabel}</Chip>
             </div>
             <div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-0.5">
               <a
@@ -173,6 +291,7 @@ export function MarketDetailModal({
                 label="CONDITION ID"
                 value={market.conditionId?.slice(0, 16) + "..." || "—"}
               />
+              <Cell label="CATEGORY" value={market.category} />
               <Cell label="STATUS" value={isActive ? "ACTIVE" : "ENDED"} />
             </Row2>
           </Section>
@@ -204,7 +323,38 @@ export function MarketDetailModal({
             </Row2>
           </Section>
 
+          {/* ── OSCILLATION ── */}
+          {crossovers.length > 0 && (
+            <Section title="OSCILLATION">
+              <div className="px-4 pb-4 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-mono text-muted-foreground">
+                    CROSSOVERS: {crossovers.length}
+                  </span>
+                  {tradeCrossoverCounts.length > 0 && (
+                    <span
+                      className={`text-xs font-mono ${
+                        tradeCrossoverCounts[0].count >=
+                        oscillationMaxCrossovers
+                          ? "text-red-500"
+                          : "text-green-600"
+                      }`}
+                    >
+                      LAST {lookbackSeconds}S: {tradeCrossoverCounts[0].count}/
+                      {oscillationMaxCrossovers}
+                    </span>
+                  )}
+                </div>
 
+                <CrossoverTimeline
+                  crossovers={crossovers}
+                  trades={marketTrades}
+                  marketStart={marketStartMs}
+                  marketEnd={marketEndMs}
+                />
+              </div>
+            </Section>
+          )}
 
           {/* ── TRADES ── */}
           {marketTrades.length > 0 && (

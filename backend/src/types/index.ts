@@ -71,6 +71,21 @@ export const POLY_URLS = {
 } as const;
 
 // ============================================
+// Momentum Signal
+// ============================================
+
+export interface MomentumSignal {
+  /** Net direction of BTC over the lookback window */
+  direction: "UP" | "DOWN" | "NEUTRAL";
+  /** Raw USD change over lookback window (positive = up, negative = down) */
+  changeUsd: number;
+  /** Lookback window in milliseconds */
+  lookbackMs: number;
+  /** Whether enough historical data exists to compute signal */
+  hasData: boolean;
+}
+
+// ============================================
 // Fee Constants (from Polymarket docs)
 // For 5-Min & 15-Min Crypto markets:
 //   fee = C × feeRate × (p × (1-p))^exponent
@@ -104,12 +119,24 @@ export const ConfigSchema = z.object({
   strategy: z.object({
     marketWindow: z.enum(MARKET_WINDOWS),
     tradeFromWindowSeconds: z.number().min(5).max(600),
+    entryPriceThreshold: z.number().min(0.5).max(0.99),
     maxEntryPrice: z.number().min(0.5).max(0.99),
     maxSimultaneousPositions: z.number().min(1).max(100),
-    allocationPerSplit: z.number().min(1).max(100),
+    minBtcDistanceUsd: z.number().min(0).max(100000),
     scanIntervalMs: z.number().min(10000),
-    takeProfitPercent: z.number().min(0.01).max(0.99),
-    stopLossPercent: z.number().min(-0.99).max(-0.01),
+    stopLossEnabled: z.boolean(),
+    stopLossPriceTrigger: z.number().min(0.01).max(0.95),
+    // Take-profit (absolute trigger price). Trigger only; realized exit uses live orderbook.
+    takeProfitEnabled: z.boolean(),
+    takeProfitTriggerPrice: z.number().min(0.01).max(0.99),
+    // Momentum filter
+    momentumEnabled: z.boolean(),
+    momentumLookbackMs: z.number().min(10_000).max(600_000),
+    momentumMinChangeUsd: z.number().min(0).max(1000),
+    // Oscillation filter — skip opportunities when BTC is choppy around the target
+    oscillationFilterEnabled: z.boolean(),
+    oscillationWindowMs: z.number().min(10_000).max(300_000),
+    oscillationMaxCrossovers: z.number().min(1).max(20),
     // Drawdown guardrails
     consecutiveLossPauseLimit: z.number().min(0).max(20),
     riskAutoResumeEnabled: z.boolean(),
