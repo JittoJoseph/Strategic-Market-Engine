@@ -2,6 +2,7 @@
 
 import type { ActivityEntry } from "@/lib/types";
 import { formatPnl } from "@/lib/utils";
+import NumberFlow from "@number-flow/react";
 
 const KIND_META: Record<
   ActivityEntry["kind"],
@@ -120,7 +121,7 @@ export function ActivityPanel({ activities, loading }: ActivityPanelProps) {
                         : "text-red-400"
                     }`}
                   >
-                    {formatPnl(entry.pnl ?? 0)}
+                    <NumberFlow value={entry.pnl ?? 0} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                   </span>
                 )}
 

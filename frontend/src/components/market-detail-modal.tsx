@@ -8,6 +8,7 @@ import {
   getMarketWindowDurationMs,
   type MarketWindow,
 } from "@/lib/types";
+import NumberFlow from "@number-flow/react";
 
 interface MarketDetailModalProps {
   market: DiscoveredMarket | null;
@@ -401,7 +402,7 @@ export function MarketDetailModal({
                             : "text-red-400"
                         }`}
                       >
-                        ${parseFloat(trade.realizedPnl).toFixed(4)}
+                        <NumberFlow value={parseFloat(trade.realizedPnl)} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                       </span>
                     )}
                   </div>
@@ -409,15 +410,15 @@ export function MarketDetailModal({
                     <div>
                       <span className="text-muted-foreground/60">ENTRY:</span>
                       <span className="ml-1 tabular-nums">
-                        ${parseFloat(trade.entryPrice).toFixed(4)} ×{" "}
-                        {parseFloat(trade.entryShares).toFixed(2)}
+                        <NumberFlow value={parseFloat(trade.entryPrice)} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} /> ×{" "}
+                        <NumberFlow value={parseFloat(trade.entryShares)} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                       </span>
                     </div>
                     {trade.exitPrice && (
                       <div>
                         <span className="text-muted-foreground/60">EXIT:</span>
                         <span className="ml-1 tabular-nums">
-                          ${parseFloat(trade.exitPrice).toFixed(4)}
+                          <NumberFlow value={parseFloat(trade.exitPrice)} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                         </span>
                       </div>
                     )}

@@ -3,6 +3,7 @@
 import type { SimulatedTrade, LiveMarketPrice } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 import { pnlColor, formatPnl } from "@/lib/utils";
+import NumberFlow from "@number-flow/react";
 
 interface TradesTableProps {
   trades: SimulatedTrade[];
@@ -227,7 +228,7 @@ export function TradesTable({
 
                 {/* SHARES */}
                 <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
-                  {shares.toFixed(1)}
+                  <NumberFlow value={shares} format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }} />
                 </td>
 
                 {/* P&L */}
@@ -237,13 +238,12 @@ export function TradesTable({
                       <span
                         className={`tabular-nums font-semibold ${pnlColor(realizedPnl)}`}
                       >
-                        {formatPnl(realizedPnl)}
+                        <NumberFlow value={realizedPnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                       </span>
                       <span
                         className={`text-[10px] tabular-nums ${pnlColor(realizedPnl, "60")}`}
                       >
-                        {realizedPnlPct >= 0 ? "+" : ""}
-                        {realizedPnlPct.toFixed(2)}%
+                        <NumberFlow value={realizedPnlPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
                       </span>
                     </div>
                   ) : unrealizedPnl !== null ? (
@@ -255,7 +255,7 @@ export function TradesTable({
                             : "text-red-400"
                         }`}
                       >
-                        {formatPnl(unrealizedPnl)}
+                        <NumberFlow value={unrealizedPnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                       </span>
                       {unrealizedPnlPct !== null && (
                         <span
@@ -265,8 +265,7 @@ export function TradesTable({
                               : "text-red-400/60"
                           }`}
                         >
-                          {unrealizedPnlPct >= 0 ? "+" : ""}
-                          {unrealizedPnlPct.toFixed(2)}%
+                          <NumberFlow value={unrealizedPnlPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
                         </span>
                       )}
                     </div>

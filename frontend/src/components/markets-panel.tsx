@@ -134,7 +134,7 @@ export function MarketsPanel({
         <thead>
           <tr className="border-b border-border/30 text-muted-foreground">
             <th className="text-left py-2 px-2 font-medium">TIME</th>
-            <th className="text-left py-2 px-2 font-medium">WINDOW</th>
+            <th className="text-left py-2 px-2 font-medium">DATE</th>
             <th className="text-left py-2 px-2 font-medium">STATUS</th>
             <th className="text-center py-2 px-2 font-medium">TRADE</th>
             <th className="text-right py-2 px-2 font-medium">CROSSOVERS</th>
@@ -143,9 +143,12 @@ export function MarketsPanel({
         </thead>
         <tbody>
           {markets.map((market) => {
-            const label =
+            const fallbackLabel =
               MARKET_WINDOW_LABELS[market.windowType as MarketWindow] ??
               market.windowType;
+            const label = market.endDate 
+              ? new Date(market.endDate).toLocaleDateString([], { month: "short", day: "numeric" }) 
+              : fallbackLabel;
             const href = polymarketMarketUrl(market);
 
             // Compute status from API's computedStatus field, fallback to

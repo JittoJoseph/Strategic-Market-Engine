@@ -23,7 +23,6 @@ import {
   usePerformanceRealtime,
   useActivityLog,
   useUnrealizedPnL,
-  useAnimatedNumber,
 } from "@/lib/hooks";
 import type {
   SimulatedTrade,
@@ -38,6 +37,7 @@ import {
   getMarketWindowDurationMs,
   type MarketWindow,
 } from "@/lib/types";
+import NumberFlow from "@number-flow/react";
 
 export function DashboardPage() {
   const [activeTab, setActiveTab] = useState("trades");
@@ -569,8 +569,7 @@ function TopDashboardSection({
   const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
   const gainFromInitial = portfolioValue - initialCapital;
-  const animatedGainFromInitial = useAnimatedNumber(gainFromInitial, 300);
-  const mainDisplayValue = animatedGainFromInitial;
+  const mainDisplayValue = gainFromInitial;
   const windowType = stats?.config?.marketWindow || "5M";
 
   // Effective BTC price at window start: use captured value or fall back to entry price from trade
@@ -854,13 +853,12 @@ function TopDashboardSection({
                 <div
                   className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${pnlColor(mainDisplayValue)}`}
                 >
-                  {formatPnl(mainDisplayValue)}
+                  <NumberFlow value={mainDisplayValue} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                 </div>
                 <div
                   className={`text-xs font-mono mt-1 ${pnlColor(roi, "70")}`}
                 >
-                  {roi >= 0 ? "+" : ""}
-                  {roi.toFixed(2)}% ROI
+                  <NumberFlow value={roi} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />% ROI
                 </div>
               </div>
               <div className="space-y-3 pt-1">
@@ -871,7 +869,7 @@ function TopDashboardSection({
                   <div
                     className={`text-sm font-bold font-mono tabular-nums ${pnlColor(unrealizedPnl)}`}
                   >
-                    {formatPnl(unrealizedPnl)}
+                    <NumberFlow value={unrealizedPnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                   </div>
                 </div>
                 <div>
@@ -879,7 +877,7 @@ function TopDashboardSection({
                     INITIAL CAPITAL
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    ${initialCapital.toFixed(2)}
+                    <NumberFlow value={initialCapital} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                   </div>
                 </div>
                 <div>
@@ -887,7 +885,7 @@ function TopDashboardSection({
                     CURRENT VALUE
                   </div>
                   <div className="text-sm font-bold font-mono tabular-nums text-foreground">
-                    ${portfolioValue.toFixed(2)}
+                    <NumberFlow value={portfolioValue} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                   </div>
                 </div>
               </div>
@@ -900,11 +898,10 @@ function TopDashboardSection({
                   PORTFOLIO VALUE
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-foreground">
-                  ${portfolioValue.toFixed(2)}
+                  <NumberFlow value={portfolioValue} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
-                  cash ${cashBalance.toFixed(2)} + positions $
-                  {openPositionsValue.toFixed(2)}
+                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5 flex items-center gap-1">
+                  cash <NumberFlow value={cashBalance} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} /> + positions <NumberFlow value={openPositionsValue} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                 </div>
               </div>
 
@@ -916,8 +913,8 @@ function TopDashboardSection({
                   <span className="text-[10px] font-mono text-muted-foreground">
                     WIN RATE
                   </span>
-                  <span className="text-base font-bold font-mono tabular-nums text-foreground">
-                    {winRate.toFixed(1)}%
+                  <span className="text-base font-bold font-mono tabular-nums text-foreground flex items-center">
+                    <NumberFlow value={winRate} format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }} />%
                   </span>
                 </div>
                 <div className="h-1 w-full rounded-full overflow-hidden flex bg-red-500/20">
@@ -960,10 +957,10 @@ function TopDashboardSection({
                   BEST TRADE
                 </div>
                 <div className="text-lg font-bold font-mono tabular-nums text-emerald-500">
-                  +${bestTrade.toFixed(4)}
+                  <NumberFlow value={bestTrade} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
-                  avg win: +${avgWin.toFixed(4)}
+                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5 flex items-center gap-1">
+                  avg win: <NumberFlow value={avgWin} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                 </div>
               </div>
               <div>
@@ -971,10 +968,10 @@ function TopDashboardSection({
                   WORST TRADE
                 </div>
                 <div className="text-lg font-bold font-mono tabular-nums text-red-500">
-                  {worstTrade < 0 ? "-" : ""}${Math.abs(worstTrade).toFixed(4)}
+                  <NumberFlow value={worstTrade} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
-                  avg loss: -${Math.abs(avgLoss).toFixed(4)}
+                <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5 flex items-center gap-1">
+                  avg loss: <NumberFlow value={avgLoss} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
                 </div>
               </div>
               <div>
@@ -982,7 +979,7 @@ function TopDashboardSection({
                   PROFIT FACTOR
                 </div>
                 <div className="text-lg font-bold font-mono tabular-nums text-foreground">
-                  {profitFactor.toFixed(2)}
+                  <NumberFlow value={profitFactor} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
                 </div>
                 <div className="text-[10px] font-mono text-muted-foreground/50 mt-0.5">
                   avg win ÷ avg loss

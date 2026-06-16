@@ -5,6 +5,7 @@ import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 import { formatPnl, pnlColor } from "@/lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
+import NumberFlow from "@number-flow/react";
 
 interface TradeDetailPopupProps {
   trade: SimulatedTrade | null;
@@ -142,7 +143,7 @@ export function TradeDetailPopup({
               <span
                 className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnlColor(pnl)}`}
               >
-                {formatPnl(pnl)}
+                <NumberFlow value={pnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
               </span>
             </div>
             <div className="flex items-baseline gap-2">
@@ -150,8 +151,7 @@ export function TradeDetailPopup({
               <span
                 className={`text-[14px] font-bold tabular-nums leading-none ${pnlColor(pnl)}`}
               >
-                {returnPct >= 0 ? "+" : ""}
-                {returnPct.toFixed(2)}%
+                <NumberFlow value={returnPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
               </span>
             </div>
           </div>
@@ -164,15 +164,15 @@ export function TradeDetailPopup({
             <Row2>
               <Cell
                 label="ENTRY PRICE"
-                value={`${(entryPrice * 100).toFixed(3)}¢`}
+                value={<><NumberFlow value={entryPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢</>}
               />
               <Cell
                 label="EXIT PRICE"
                 value={
-                  exitPrice !== null ? `${(exitPrice * 100).toFixed(3)}¢` : "—"
+                  exitPrice !== null ? <><NumberFlow value={exitPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢</> : "—"
                 }
               />
-              <Cell label="SHARES" value={shares.toFixed(4)} />
+              <Cell label="SHARES" value={<NumberFlow value={shares} format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
               <Cell
                 label="SIDE"
                 value={
@@ -189,9 +189,9 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              <Cell label="BUDGET" value={`$${budget.toFixed(4)}`} />
-              <Cell label="ACTUAL COST" value={`$${actualCost.toFixed(4)}`} />
-              <Cell label="ENTRY FEES" value={`$${entryFees.toFixed(6)}`} />
+              <Cell label="BUDGET" value={<NumberFlow value={budget} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
+              <Cell label="ACTUAL COST" value={<NumberFlow value={actualCost} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
+              <Cell label="ENTRY FEES" value={<NumberFlow value={entryFees} format={{ style: "currency", currency: "USD", minimumFractionDigits: 6, maximumFractionDigits: 6 }} />} />
               <Cell
                 label="FILL STATUS"
                 value={
@@ -215,9 +215,9 @@ export function TradeDetailPopup({
                     MIN PRICE DURING WINDOW
                   </span>
                   <span className="text-[13px] tabular-nums text-amber-400">
-                    {(minPrice * 100).toFixed(3)}¢
+                    <NumberFlow value={minPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢
                     <span className="text-muted-foreground/35 ml-2 text-[11px]">
-                      −{((entryPrice - minPrice) * 100).toFixed(3)}¢ draw
+                      −<NumberFlow value={(entryPrice - minPrice) * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢ draw
                     </span>
                   </span>
                 </div>
@@ -240,7 +240,7 @@ export function TradeDetailPopup({
                   <Cell label="TARGET" value={fmtBtc(btcTarget)} />
                 )}
                 {btcDist !== null && btcDist > 0 && (
-                  <Cell label="DISTANCE" value={`$${btcDist.toFixed(2)}`} />
+                  <Cell label="DISTANCE" value={<NumberFlow value={btcDist} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />} />
                 )}
                 {trade.momentumDirection && (
                   <Cell
@@ -258,10 +258,7 @@ export function TradeDetailPopup({
                         {trade.momentumDirection}
                         {trade.momentumChangeUsd && (
                           <span className="text-muted-foreground/40 ml-2 font-mono">
-                            $
-                            {Math.abs(
-                              parseFloat(trade.momentumChangeUsd),
-                            ).toFixed(0)}
+                            <NumberFlow value={Math.abs(parseFloat(trade.momentumChangeUsd))} format={{ style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }} />
                           </span>
                         )}
                       </span>
