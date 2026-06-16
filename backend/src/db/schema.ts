@@ -120,8 +120,6 @@ export const simulatedTrades = pgTable(
     takeProfitPnl: decimal("take_profit_pnl", { precision: 18, scale: 8 }),
     // Status
     status: text("status").default("OPEN").notNull(),
-    orderbookSnapshot: jsonb("orderbook_snapshot"),
-    raw: jsonb("raw"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -129,6 +127,7 @@ export const simulatedTrades = pgTable(
     marketIdIdx: index("st_market_id_idx").on(table.marketId),
     statusIdx: index("st_status_idx").on(table.status),
     entryTsIdx: index("st_entry_ts_idx").on(table.entryTs),
+    statusEntryTsIdx: index("st_status_entry_ts_idx").on(table.status, table.entryTs),
     // Prevent duplicate open trades per market+token
     uqOpenTradePerToken: uniqueIndex("uq_open_trade_per_market_token")
       .on(table.marketId, table.tokenId)

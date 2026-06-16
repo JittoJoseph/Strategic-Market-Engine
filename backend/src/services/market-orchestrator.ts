@@ -859,7 +859,6 @@ export class MarketOrchestrator extends EventEmitter {
         btcDistanceUsd: opp.btcDistanceUsd,
         momentumDirection: momentum?.direction ?? undefined,
         momentumChangeUsd: momentum ? Math.abs(momentum.changeUsd) : undefined,
-        orderbookSnapshot: execution.orderbookSnapshot,
       });
       const tradeId = tradeRow!.id;
 

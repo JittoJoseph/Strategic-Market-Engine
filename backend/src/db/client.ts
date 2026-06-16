@@ -133,8 +133,6 @@ export async function createSimulatedTrade(data: {
   btcDistanceUsd?: number;
   momentumDirection?: string;
   momentumChangeUsd?: number;
-  orderbookSnapshot?: unknown;
-  raw?: unknown;
 }) {
   const database = getDb();
   const result = await database
@@ -159,8 +157,6 @@ export async function createSimulatedTrade(data: {
       btcDistanceUsd: data.btcDistanceUsd?.toString() ?? null,
       momentumDirection: data.momentumDirection || null,
       momentumChangeUsd: data.momentumChangeUsd?.toString() ?? null,
-      orderbookSnapshot: data.orderbookSnapshot as any,
-      raw: data.raw as any,
       status: "OPEN",
     })
     .returning();

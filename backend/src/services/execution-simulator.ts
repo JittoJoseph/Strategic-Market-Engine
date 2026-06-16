@@ -23,12 +23,9 @@ export interface ExecutionResult {
   netCost: number; // totalCost + fees
   /** True when budget remains after exhausting all eligible ask levels */
   isPartialFill: boolean;
-  /** True when filled shares < orderbook min_order_size (Polymarket would reject this) */
   belowMinimumOrderSize: boolean;
-  /** The min_order_size from the orderbook (default 5) */
   minOrderSize: number;
   fillDetails: FillDetail[];
-  orderbookSnapshot: unknown;
 }
 
 interface FillDetail {
@@ -150,7 +147,6 @@ export function simulateLimitBuy(
     belowMinimumOrderSize,
     minOrderSize,
     fillDetails,
-    orderbookSnapshot: snapshotOrderbook(orderbook),
   };
 }
 
@@ -198,7 +194,7 @@ export interface SellExecutionResult {
   netRevenue: number; // totalRevenue - fees
   isPartialFill: boolean;
   fillDetails: SellFillDetail[];
-  orderbookSnapshot: unknown;
+  belowMinimumOrderSize: boolean;
 }
 
 interface SellFillDetail {
@@ -297,7 +293,7 @@ export function simulateLimitSell(
     netRevenue: totalRevenue.toNumber() - roundedFees,
     isPartialFill,
     fillDetails,
-    orderbookSnapshot: snapshotOrderbook(orderbook),
+    belowMinimumOrderSize: false,
   };
 }
 
