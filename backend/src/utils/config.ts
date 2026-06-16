@@ -42,7 +42,7 @@ export function loadConfig(): Config {
       maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 50),
       allocationPerSplit: envNum("ALLOCATION_PER_SPLIT", 5.0),
       scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60_000),
-      takeProfitPercent: envNum("TAKE_PROFIT_PERCENT", 0.30),
+      takeProfitPercent: envNum("TAKE_PROFIT_PERCENT", 0.20),
       stopLossPercent: envNum("STOP_LOSS_PERCENT", -0.30),
       // Risk guardrails
       consecutiveLossPauseLimit: envNum("CONSECUTIVE_LOSS_PAUSE_LIMIT", 3),
