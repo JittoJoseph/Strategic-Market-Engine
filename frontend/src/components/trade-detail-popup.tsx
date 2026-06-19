@@ -5,7 +5,6 @@ import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 import { formatPnl, pnlColor } from "@/lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
-import NumberFlow from "@number-flow/react";
 
 interface TradeDetailPopupProps {
   trade: SimulatedTrade | null;
@@ -65,7 +64,6 @@ export function TradeDetailPopup({
   const fmtBtc = (n: number) =>
     `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  /* ─── Badge colour helpers ─── */
   const exitReason = trade.exitReason;
   const statusBadgeCls = !isClosed
     ? "text-blue-400 border-blue-400/25 bg-blue-400/5"
@@ -75,18 +73,10 @@ export function TradeDetailPopup({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      {/*
-        w-[calc(100%-2rem)]  → full-width minus 1rem each side on mobile
-        sm:max-w-[520px]     → cap at 520px on larger screens
-        The base DialogContent has p-6; we reset it to p-0 and control padding manually.
-      */}
       <DialogContent className="w-[calc(100%-2rem)] sm:w-full sm:max-w-[520px] font-mono bg-background border-border/30 flex flex-col max-h-[90dvh] gap-0 p-0 overflow-hidden rounded-xl">
-        {/* ── HEADER ── */}
         <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border/20">
-          {/* Row 1: chips + actions */}
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-1.5 flex-wrap">
-              {/* Status / outcome badge */}
               <span
                 className={`inline-flex items-center text-[10px] font-semibold tracking-[0.15em] px-2 py-0.5 rounded border ${statusBadgeCls}`}
               >
@@ -99,7 +89,6 @@ export function TradeDetailPopup({
               {trade.outcomeLabel && <Chip>{trade.outcomeLabel}</Chip>}
             </div>
 
-            {/* Actions */}
             <div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-0.5">
               {trade.marketId && (
                 <a
@@ -122,18 +111,15 @@ export function TradeDetailPopup({
             </div>
           </div>
 
-          {/* Row 2: Market question */}
           {resolvedQuestion ? (
             <DialogTitle className="mt-2 text-[12px] font-sans font-normal text-foreground/65 leading-relaxed tracking-[0.01em]">
               {resolvedQuestion}
             </DialogTitle>
           ) : (
-            /* DialogTitle must always be rendered for a11y */
             <DialogTitle className="sr-only">Trade Detail</DialogTitle>
           )}
         </div>
 
-        {/* ── PnL HERO — closed trades only ── */}
         {isClosed && (
           <div
             className={`shrink-0 flex items-center justify-between gap-4 px-4 py-2.5 border-b border-border/20 ${pnl >= 0 ? "bg-emerald-500/[0.035]" : "bg-red-500/[0.035]"}`}
@@ -143,7 +129,7 @@ export function TradeDetailPopup({
               <span
                 className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnlColor(pnl)}`}
               >
-                <NumberFlow value={pnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
+                {pnl.toLocaleString("en-US", { style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 })}
               </span>
             </div>
             <div className="flex items-baseline gap-2">
@@ -151,28 +137,43 @@ export function TradeDetailPopup({
               <span
                 className={`text-[14px] font-bold tabular-nums leading-none ${pnlColor(pnl)}`}
               >
-                <NumberFlow value={returnPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
+                {returnPct.toLocaleString("en-US", { signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
               </span>
             </div>
           </div>
         )}
 
-        {/* ── SCROLLABLE BODY ── */}
         <div className="overflow-y-auto flex-1 overscroll-contain">
-          {/* ── EXECUTION ── */}
           <Section title="EXECUTION">
             <Row2>
               <Cell
                 label="ENTRY PRICE"
-                value={<><NumberFlow value={entryPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢</>}
+                value={
+                  <>
+                    {(entryPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                    ¢
+                  </>
+                }
               />
               <Cell
                 label="EXIT PRICE"
                 value={
-                  exitPrice !== null ? <><NumberFlow value={exitPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢</> : "—"
+                  exitPrice !== null ? (
+                    <>
+                      {(exitPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                      ¢
+                    </>
+                  ) : (
+                    "—"
+                  )
                 }
               />
-              <Cell label="SHARES" value={<NumberFlow value={shares} format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
+              <Cell
+                label="SHARES"
+                value={
+                  shares.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                }
+              />
               <Cell
                 label="SIDE"
                 value={
@@ -189,9 +190,24 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              <Cell label="BUDGET" value={<NumberFlow value={budget} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
-              <Cell label="ACTUAL COST" value={<NumberFlow value={actualCost} format={{ style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />} />
-              <Cell label="ENTRY FEES" value={<NumberFlow value={entryFees} format={{ style: "currency", currency: "USD", minimumFractionDigits: 6, maximumFractionDigits: 6 }} />} />
+              <Cell
+                label="BUDGET"
+                value={
+                  budget.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                }
+              />
+              <Cell
+                label="ACTUAL COST"
+                value={
+                  actualCost.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                }
+              />
+              <Cell
+                label="ENTRY FEES"
+                value={
+                  entryFees.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 6, maximumFractionDigits: 6 })
+                }
+              />
               <Cell
                 label="FILL STATUS"
                 value={
@@ -208,16 +224,18 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              {/* Min price spans full width when present */}
               {minPrice !== null && minPrice > 0 && minPrice < entryPrice && (
                 <div className="col-span-2 flex items-center justify-between py-2 px-4 border-t border-border/10 bg-amber-500/[0.03]">
                   <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">
                     MIN PRICE DURING WINDOW
                   </span>
                   <span className="text-[13px] tabular-nums text-amber-400">
-                    <NumberFlow value={minPrice * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢
+                    {(minPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                    ¢
                     <span className="text-muted-foreground/35 ml-2 text-[11px]">
-                      −<NumberFlow value={(entryPrice - minPrice) * 100} format={{ minimumFractionDigits: 3, maximumFractionDigits: 3 }} />¢ draw
+                      −
+                      {((entryPrice - minPrice) * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                      ¢ draw
                     </span>
                   </span>
                 </div>
@@ -225,7 +243,6 @@ export function TradeDetailPopup({
             </Row2>
           </Section>
 
-          {/* ── BTC CONTEXT ── */}
           {(btcAtEntry !== null ||
             (btcTarget !== null && btcTarget > 0) ||
             (btcDist !== null && btcDist > 0) ||
@@ -240,7 +257,12 @@ export function TradeDetailPopup({
                   <Cell label="TARGET" value={fmtBtc(btcTarget)} />
                 )}
                 {btcDist !== null && btcDist > 0 && (
-                  <Cell label="DISTANCE" value={<NumberFlow value={btcDist} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />} />
+                  <Cell
+                    label="DISTANCE"
+                    value={
+                      btcDist.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    }
+                  />
                 )}
                 {trade.momentumDirection && (
                   <Cell
@@ -258,7 +280,7 @@ export function TradeDetailPopup({
                         {trade.momentumDirection}
                         {trade.momentumChangeUsd && (
                           <span className="text-muted-foreground/40 ml-2 font-mono">
-                            <NumberFlow value={Math.abs(parseFloat(trade.momentumChangeUsd))} format={{ style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }} />
+                            {Math.abs(parseFloat(trade.momentumChangeUsd)).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                           </span>
                         )}
                       </span>
@@ -321,7 +343,6 @@ export function TradeDetailPopup({
             </Section>
           )}
 
-          {/* ── RESULT (only if settled) ── */}
           {isClosed && outcome && (
             <div className="flex items-center gap-2 px-4 py-2 border-b border-border/15">
               <span className="text-[10px] font-mono tracking-[0.2em] text-muted-foreground/35 uppercase">
@@ -348,7 +369,6 @@ export function TradeDetailPopup({
             </div>
           )}
 
-          {/* ── TIMESTAMPS ── */}
           <div className="border-b border-border/15 last:border-b-0 pb-3">
             <div className="px-4 pt-3 pb-1">
               <span className="text-[10px] font-mono font-medium tracking-[0.25em] text-muted-foreground/40 uppercase">
@@ -381,8 +401,6 @@ export function TradeDetailPopup({
   );
 }
 
-/* ─────────────── Primitives ─────────────── */
-
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center text-[10px] font-mono font-medium tracking-wider text-muted-foreground/50 border border-border/25 rounded px-1.5 py-0.5">
@@ -391,7 +409,6 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Micro-label used in the PnL hero */
 function Label({ children }: { children: React.ReactNode }) {
   return (
     <span className="block text-[10px] font-mono tracking-[0.2em] text-muted-foreground/40 uppercase">
@@ -419,7 +436,6 @@ function Section({
   );
 }
 
-/** 2-column grid wrapper for Cell items */
 function Row2({ children }: { children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-2 divide-x divide-y divide-border/[0.08]">
@@ -440,8 +456,6 @@ function Cell({ label, value }: { label: string; value: React.ReactNode }) {
     </div>
   );
 }
-
-/* ─────────────── Formatters ─────────────── */
 
 function formatTs(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
