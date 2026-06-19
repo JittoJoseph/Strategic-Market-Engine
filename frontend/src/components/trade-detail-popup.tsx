@@ -129,7 +129,13 @@ export function TradeDetailPopup({
               <span
                 className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnlColor(pnl)}`}
               >
-                {pnl.toLocaleString("en-US", { style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 })}
+                {pnl.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  signDisplay: "always",
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
               </span>
             </div>
             <div className="flex items-baseline gap-2">
@@ -137,7 +143,12 @@ export function TradeDetailPopup({
               <span
                 className={`text-[14px] font-bold tabular-nums leading-none ${pnlColor(pnl)}`}
               >
-                {returnPct.toLocaleString("en-US", { signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                {returnPct.toLocaleString("en-US", {
+                  signDisplay: "always",
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+                %
               </span>
             </div>
           </div>
@@ -150,7 +161,10 @@ export function TradeDetailPopup({
                 label="ENTRY PRICE"
                 value={
                   <>
-                    {(entryPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                    {(entryPrice * 100).toLocaleString("en-US", {
+                      minimumFractionDigits: 3,
+                      maximumFractionDigits: 3,
+                    })}
                     ¢
                   </>
                 }
@@ -160,7 +174,10 @@ export function TradeDetailPopup({
                 value={
                   exitPrice !== null ? (
                     <>
-                      {(exitPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
+                      {(exitPrice * 100).toLocaleString("en-US", {
+                        minimumFractionDigits: 3,
+                        maximumFractionDigits: 3,
+                      })}
                       ¢
                     </>
                   ) : (
@@ -170,43 +187,53 @@ export function TradeDetailPopup({
               />
               <Cell
                 label="SHARES"
-                value={
-                  shares.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
-                }
+                value={shares.toLocaleString("en-US", {
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
               />
               <Cell
-                label="SIDE"
+                label="MIN PRICE DURNING WINDOW"
                 value={
-                  <span
-                    className={
-                      trade.side === "BUY"
-                        ? "text-emerald-400"
-                        : trade.side === "SELL"
-                          ? "text-red-400"
-                          : "text-foreground/70"
-                    }
-                  >
-                    {trade.side}
-                  </span>
+                  minPrice !== null && minPrice > 0 ? (
+                    <>
+                      {(minPrice * 100).toLocaleString("en-US", {
+                        minimumFractionDigits: 3,
+                        maximumFractionDigits: 3,
+                      })}
+                      ¢
+                    </>
+                  ) : (
+                    "—"
+                  )
                 }
               />
               <Cell
                 label="BUDGET"
-                value={
-                  budget.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 })
-                }
+                value={budget.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
               />
               <Cell
                 label="ACTUAL COST"
-                value={
-                  actualCost.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 })
-                }
+                value={actualCost.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
               />
               <Cell
                 label="ENTRY FEES"
-                value={
-                  entryFees.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 6, maximumFractionDigits: 6 })
-                }
+                value={entryFees.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 6,
+                  maximumFractionDigits: 6,
+                })}
               />
               <Cell
                 label="FILL STATUS"
@@ -224,22 +251,6 @@ export function TradeDetailPopup({
                   </span>
                 }
               />
-              {minPrice !== null && minPrice > 0 && minPrice < entryPrice && (
-                <div className="col-span-2 flex items-center justify-between py-2 px-4 border-t border-border/10 bg-amber-500/[0.03]">
-                  <span className="text-[10px] tracking-[0.18em] text-muted-foreground/45">
-                    MIN PRICE DURING WINDOW
-                  </span>
-                  <span className="text-[13px] tabular-nums text-amber-400">
-                    {(minPrice * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
-                    ¢
-                    <span className="text-muted-foreground/35 ml-2 text-[11px]">
-                      −
-                      {((entryPrice - minPrice) * 100).toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}
-                      ¢ draw
-                    </span>
-                  </span>
-                </div>
-              )}
             </Row2>
           </Section>
 
@@ -259,9 +270,12 @@ export function TradeDetailPopup({
                 {btcDist !== null && btcDist > 0 && (
                   <Cell
                     label="DISTANCE"
-                    value={
-                      btcDist.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    }
+                    value={btcDist.toLocaleString("en-US", {
+                      style: "currency",
+                      currency: "USD",
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   />
                 )}
                 {trade.momentumDirection && (
@@ -280,7 +294,14 @@ export function TradeDetailPopup({
                         {trade.momentumDirection}
                         {trade.momentumChangeUsd && (
                           <span className="text-muted-foreground/40 ml-2 font-mono">
-                            {Math.abs(parseFloat(trade.momentumChangeUsd)).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            {Math.abs(
+                              parseFloat(trade.momentumChangeUsd),
+                            ).toLocaleString("en-US", {
+                              style: "currency",
+                              currency: "USD",
+                              minimumFractionDigits: 0,
+                              maximumFractionDigits: 0,
+                            })}
                           </span>
                         )}
                       </span>
