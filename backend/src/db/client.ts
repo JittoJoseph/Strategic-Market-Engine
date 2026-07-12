@@ -3,7 +3,7 @@ import postgres from "postgres";
 import { getConfig } from "../utils/config.js";
 import { createModuleLogger } from "../utils/logger.js";
 import * as schema from "./schema.js";
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const logger = createModuleLogger("database");
 
@@ -30,25 +30,6 @@ export async function connectDatabase(): Promise<void> {
   logger.info("Database connection established");
 }
 
-export async function disconnectDatabase(): Promise<void> {
-  if (client) {
-    await client.end();
-    client = null;
-    db = null;
-    logger.info("Database connection closed");
-  }
-}
-
-// ============================================
-// Market helpers
-// ============================================
-
-/**
- * Insert a market row only if it doesn't already exist.
- * Uses INSERT … ON CONFLICT DO NOTHING so we never update existing rows
- * just because the scanner re-discovered them.
- * Returns `true` when a new row was actually inserted.
- */
 export async function insertMarketIfNew(
   id: string,
   data: {
@@ -91,10 +72,6 @@ export async function insertMarketIfNew(
   return result.length > 0;
 }
 
-/**
- * Load open trades with their market data in a single query (JOIN).
- * Avoids N+1 queries during startup.
- */
 export async function loadOpenTradesWithMarkets() {
   const database = getDb();
   const rows = await database
@@ -110,10 +87,6 @@ export async function loadOpenTradesWithMarkets() {
     .where(eq(schema.simulatedTrades.status, "OPEN"));
   return rows;
 }
-
-// ============================================
-// Trade helpers
-// ============================================
 
 export async function createSimulatedTrade(data: {
   marketId?: string;
@@ -131,8 +104,9 @@ export async function createSimulatedTrade(data: {
   btcPriceAtEntry?: number;
   btcTargetPrice?: number;
   btcDistanceUsd?: number;
-  momentumDirection?: string;
-  momentumChangeUsd?: number;
+  entryZ?: number;
+  entrySigma?: number;
+  secondsToEnd?: number;
 }) {
   const database = getDb();
   const result = await database
@@ -155,8 +129,9 @@ export async function createSimulatedTrade(data: {
       btcPriceAtEntry: data.btcPriceAtEntry?.toString() ?? null,
       btcTargetPrice: data.btcTargetPrice?.toString() ?? null,
       btcDistanceUsd: data.btcDistanceUsd?.toString() ?? null,
-      momentumDirection: data.momentumDirection || null,
-      momentumChangeUsd: data.momentumChangeUsd?.toString() ?? null,
+      entryZ: data.entryZ?.toString() ?? null,
+      entrySigma: data.entrySigma?.toString() ?? null,
+      secondsToEnd: data.secondsToEnd?.toString() ?? null,
       status: "OPEN",
     })
     .returning();
@@ -168,14 +143,8 @@ export async function resolveTrade(
   outcome: "WIN" | "LOSS",
   realizedPnl: string,
   exitPrice?: string,
-  minPriceDuringPosition?: string,
   extras?: {
-    exitReason?: "RESOLUTION" | "STOP_LOSS" | "TAKE_PROFIT" | "FORCE_TIMEOUT";
-    takeProfitTriggerPrice?: string;
-    takeProfitTriggeredAt?: Date;
-    takeProfitExitPrice?: string;
-    takeProfitFees?: string;
-    takeProfitPnl?: string;
+    exitReason?: "RESOLUTION" | "RECROSS" | "FORCE_TIMEOUT";
   },
 ) {
   const database = getDb();
@@ -190,28 +159,12 @@ export async function resolveTrade(
       realizedPnl,
       status: "SETTLED",
       updatedAt: new Date(),
-      ...(minPriceDuringPosition != null ? { minPriceDuringPosition } : {}),
       ...(extras?.exitReason ? { exitReason: extras.exitReason } : {}),
-      ...(extras?.takeProfitTriggerPrice
-        ? { takeProfitTriggerPrice: extras.takeProfitTriggerPrice }
-        : {}),
-      ...(extras?.takeProfitTriggeredAt
-        ? { takeProfitTriggeredAt: extras.takeProfitTriggeredAt }
-        : {}),
-      ...(extras?.takeProfitExitPrice
-        ? { takeProfitExitPrice: extras.takeProfitExitPrice }
-        : {}),
-      ...(extras?.takeProfitFees ? { takeProfitFees: extras.takeProfitFees } : {}),
-      ...(extras?.takeProfitPnl ? { takeProfitPnl: extras.takeProfitPnl } : {}),
     })
     .where(eq(schema.simulatedTrades.id, id))
     .returning();
   return result[0];
 }
-
-// ============================================
-// Audit log
-// ============================================
 
 export async function logAudit(
   level: "info" | "warn" | "error",
@@ -232,11 +185,6 @@ export async function logAudit(
   }
 }
 
-// ============================================
-// Portfolio helpers
-// ============================================
-
-/** Get the single portfolio row (or null if not initialised). */
 export async function getPortfolio() {
   const database = getDb();
   const rows = await database
@@ -247,10 +195,6 @@ export async function getPortfolio() {
   return rows[0] ?? null;
 }
 
-/**
- * Initialise the portfolio row if it doesn't exist.
- * If it already exists, leave it alone (allows server restarts without resetting).
- */
 export async function initPortfolio(startingCapital: number) {
   const database = getDb();
   const existing = await getPortfolio();
@@ -267,7 +211,6 @@ export async function initPortfolio(startingCapital: number) {
   return result[0];
 }
 
-/** Atomically update cash balance. */
 export async function updateCashBalance(newBalance: string) {
   const database = getDb();
   const result = await database
@@ -278,16 +221,11 @@ export async function updateCashBalance(newBalance: string) {
   return result[0];
 }
 
-/**
- * Wipe all data and reset portfolio to the given starting capital.
- * Used by the admin wipe endpoint.
- */
 export async function wipeAndResetPortfolio(startingCapital: number) {
   const database = getDb();
   await database.delete(schema.simulatedTrades);
   await database.delete(schema.auditLogs);
   await database.delete(schema.portfolio);
-  // Re-create portfolio with fresh capital
   const result = await database
     .insert(schema.portfolio)
     .values({

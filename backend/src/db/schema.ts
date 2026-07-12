@@ -11,11 +11,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
-// ============================================
-// BTC End-of-Window Micro-Profit Simulation Schema
-// ============================================
-
-/** Cached market metadata from Gamma API */
 export const markets = pgTable(
   "markets",
   {
@@ -23,12 +18,12 @@ export const markets = pgTable(
     conditionId: text("condition_id"),
     slug: text("slug"),
     question: text("question"),
-    clobTokenIds: jsonb("clob_token_ids"), // ["tokenUp","tokenDown"]
-    outcomes: jsonb("outcomes"), // ["Up","Down"]
-    windowType: text("window_type").notNull(), // 5M, 15M, 1H, 4H, 1D
-    category: text("category").notNull(), // btc-5m, btc-15m, etc.
+    clobTokenIds: jsonb("clob_token_ids"),
+    outcomes: jsonb("outcomes"),
+    windowType: text("window_type").notNull(),
+    category: text("category").notNull(),
     endDate: text("end_date"),
-    targetPrice: decimal("target_price", { precision: 18, scale: 2 }), // BTC target parsed from question
+    targetPrice: decimal("target_price", { precision: 18, scale: 2 }),
     active: boolean("active").default(true).notNull(),
     metadata: jsonb("metadata"),
     lastFetchedAt: timestamp("last_fetched_at").defaultNow().notNull(),
@@ -43,7 +38,6 @@ export const markets = pgTable(
   }),
 );
 
-/** Portfolio state (single-row table) */
 export const portfolio = pgTable("portfolio", {
   id: integer("id").primaryKey().default(1),
   initialCapital: decimal("initial_capital", {
@@ -55,7 +49,6 @@ export const portfolio = pgTable("portfolio", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-/** Simulated trades */
 export const simulatedTrades = pgTable(
   "simulated_trades",
   {
@@ -65,60 +58,35 @@ export const simulatedTrades = pgTable(
     marketId: text("market_id"),
     tokenId: text("token_id"),
     marketCategory: text("market_category"),
-    windowType: text("window_type"), // 5M, 15M, etc.
+    windowType: text("window_type"),
     side: text("side").default("BUY").notNull(),
-    outcomeLabel: text("outcome_label"), // "Up" or "Down"
+    outcomeLabel: text("outcome_label"),
     orderType: text("order_type").default("FAK").notNull(),
-    // Entry
     entryTs: timestamp("entry_ts").notNull(),
     entryPrice: decimal("entry_price", { precision: 18, scale: 8 }).notNull(),
     entryShares: decimal("entry_shares", { precision: 18, scale: 8 }).notNull(),
-    /** Budget allocated from portfolio (portfolioValue / slots) */
     positionBudget: decimal("position_budget", {
       precision: 18,
       scale: 8,
     }).notNull(),
-    /** Actual USD spent (shares × avgFillPrice + fees) — deducted from cash */
     actualCost: decimal("actual_cost", { precision: 18, scale: 8 }).notNull(),
     entryFees: decimal("entry_fees", { precision: 18, scale: 8 }).default("0"),
-    fillStatus: text("fill_status").default("FULL"), // FULL | PARTIAL | FAILED
-    // BTC context at entry
+    fillStatus: text("fill_status").default("FULL"),
     btcPriceAtEntry: decimal("btc_price_at_entry", { precision: 18, scale: 2 }),
     btcTargetPrice: decimal("btc_target_price", { precision: 18, scale: 2 }),
     btcDistanceUsd: decimal("btc_distance_usd", {
       precision: 10,
       scale: 4,
     }),
-    // Momentum context at entry
-    momentumDirection: text("momentum_direction"), // "UP" | "DOWN"
-    momentumChangeUsd: decimal("momentum_change_usd", {
-      precision: 10,
-      scale: 4,
-    }),
-    // Exit / resolution
+    // z = signedDistance / (sigma·√secondsLeft); sigma in $/s
+    entryZ: decimal("entry_z", { precision: 10, scale: 4 }),
+    entrySigma: decimal("entry_sigma", { precision: 18, scale: 8 }),
+    secondsToEnd: decimal("seconds_to_end", { precision: 8, scale: 2 }),
     exitPrice: decimal("exit_price", { precision: 18, scale: 8 }),
     exitTs: timestamp("exit_ts"),
-    exitOutcome: text("exit_outcome"), // WIN | LOSS
-    exitReason: text("exit_reason"), // RESOLUTION | STOP_LOSS | TAKE_PROFIT | FORCE_TIMEOUT
+    exitOutcome: text("exit_outcome"),
+    exitReason: text("exit_reason"),
     realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }),
-    /** Lowest bestBid observed while position was open (until window close) */
-    minPriceDuringPosition: decimal("min_price_during_position", {
-      precision: 18,
-      scale: 8,
-    }),
-    // Take-profit details (when early exit is TP-triggered)
-    takeProfitTriggerPrice: decimal("take_profit_trigger_price", {
-      precision: 18,
-      scale: 8,
-    }),
-    takeProfitTriggeredAt: timestamp("take_profit_triggered_at"),
-    takeProfitExitPrice: decimal("take_profit_exit_price", {
-      precision: 18,
-      scale: 8,
-    }),
-    takeProfitFees: decimal("take_profit_fees", { precision: 18, scale: 8 }),
-    takeProfitPnl: decimal("take_profit_pnl", { precision: 18, scale: 8 }),
-    // Status
     status: text("status").default("OPEN").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -128,14 +96,12 @@ export const simulatedTrades = pgTable(
     statusIdx: index("st_status_idx").on(table.status),
     entryTsIdx: index("st_entry_ts_idx").on(table.entryTs),
     statusEntryTsIdx: index("st_status_entry_ts_idx").on(table.status, table.entryTs),
-    // Prevent duplicate open trades per market+token
     uqOpenTradePerToken: uniqueIndex("uq_open_trade_per_market_token")
       .on(table.marketId, table.tokenId)
       .where(sql`status = 'OPEN'`),
   }),
 );
 
-/** Audit log for errors, rate limits, system events */
 export const auditLogs = pgTable(
   "audit_log",
   {
