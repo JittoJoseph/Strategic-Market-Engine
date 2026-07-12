@@ -12,18 +12,9 @@ import {
 const logger = createModuleLogger("portfolio-manager");
 
 /**
- * PortfolioManager
- *
- * Tracks the simulated portfolio's cash balance and computes position sizes.
- *
- * Key rules:
- * - Position sizing = portfolioValue / maxPositions
- * - portfolioValue = cash + sum of open positions at current price
- * - Only the *actual fill cost* (shares × avgPrice + fees) is deducted from cash
- * - Budget is always sized at maxEntryPrice (worst-case we'd accept), so even
- *   if entering at a lower price the budget can absorb fills up to the limit
- * - Minimum position: POLYMARKET_MIN_ORDER_SIZE shares (protocol-level = 5)
- * - Cash balance is persisted in DB so it survives restarts
+ * Tracks the simulated portfolio's cash balance (persisted in DB) and sizes
+ * positions at portfolioValue / maxPositions, floored so the budget can always
+ * afford the protocol minimum of POLYMARKET_MIN_ORDER_SIZE (5) shares.
  */
 export class PortfolioManager {
   private cashBalance: Decimal = new Decimal(0);
@@ -58,8 +49,6 @@ export class PortfolioManager {
     this.initialCapital = new Decimal(portfolio.initialCapital);
   }
 
-  // ── Getters ──────────────────────────────────────────────────
-
   getCashBalance(): number {
     return this.cashBalance.toNumber();
   }
@@ -68,25 +57,10 @@ export class PortfolioManager {
     return this.initialCapital.toNumber();
   }
 
-  // ── Position sizing ──────────────────────────────────────────
-
   /**
-   * Compute the budget for the next position.
-   *
-   * Budget is sized at **maxEntryPrice** (the worst-case price we'd accept),
-   * not at the current best ask. This guarantees the budget can fill at
-   * least POLYMARKET_MIN_ORDER_SIZE shares even if every eligible ask level
-   * is right at our limit price.
-   *
-   *   maxPrice   = config.strategy.maxEntryPrice
-   *   rawBudget  = portfolioValue / maxSimultaneousPositions
-   *   minBudget  = MIN_ORDER_SIZE × (maxPrice + fee_at_maxPrice)
-   *   budget     = max(rawBudget, minBudget)
-   *   if cash < minBudget → return 0 (can't afford minimum order)
-   *   cap at cashBalance
-   *
-   * @param openPositionsValue  Sum of actualCost for all OPEN trades
-   * @returns Budget in USD, or 0 if cash can't cover the minimum share count
+   * Budget for the next position, sized at maxEntryPrice (the worst-case price
+   * we'd accept) so it can fill the minimum share count even when every eligible
+   * ask sits at the limit. Returns 0 if cash can't afford that minimum.
    */
   computePositionBudget(openPositionsValue: number): number {
     const config = getConfig();
@@ -97,15 +71,12 @@ export class PortfolioManager {
       config.strategy.maxSimultaneousPositions,
     );
 
-    // Cost of the minimum share count at maxEntryPrice (worst case we'd accept)
     const feePerShare = calculateFeePerShare(maxPrice);
     const costPerShare = new Decimal(maxPrice).plus(feePerShare);
     const minBudget = costPerShare.mul(minShares);
 
-    // Use whichever is larger: the equal-share slice or the minimum-shares cost
     const budget = Decimal.max(rawBudget, minBudget);
 
-    // If we can't even afford the minimum shares at worst-case price, skip
     if (this.cashBalance.lt(minBudget)) {
       logger.warn(
         {
@@ -119,18 +90,11 @@ export class PortfolioManager {
       return 0;
     }
 
-    // Don't spend more than available cash.
     const capped = Decimal.min(budget, this.cashBalance);
     return capped.toDP(8).toNumber();
   }
 
-  // ── Cash mutations ───────────────────────────────────────────
-
-  /**
-   * Deduct the actual fill cost from cash after a buy is executed.
-   * Returns false if there's not enough cash (shouldn't happen if
-   * computePositionBudget was called first, but defensive).
-   */
+  /** Deduct fill cost after a buy; returns false if cash is insufficient. */
   async deductCash(amount: number): Promise<boolean> {
     const dec = new Decimal(amount);
     if (dec.gt(this.cashBalance)) {
@@ -149,9 +113,7 @@ export class PortfolioManager {
     return true;
   }
 
-  /**
-   * Add cash back after a position is resolved (win payout or stop-loss sell).
-   */
+  /** Add cash back after a position is resolved or exited. */
   async addCash(amount: number): Promise<void> {
     const dec = new Decimal(amount);
     this.cashBalance = this.cashBalance.plus(dec);

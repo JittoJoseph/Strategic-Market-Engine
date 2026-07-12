@@ -9,47 +9,39 @@ const logger = createModuleLogger("main");
 
 async function main(): Promise<void> {
   logger.info("═══════════════════════════════════════════");
-  logger.info("  PenguinX BTC Analysis — v3.0");
-  logger.info("  End-of-Window Micro-Profit Strategy");
+  logger.info("  PenguinX BTC Analysis — v4.0");
+  logger.info("  Volatility-Barrier (z-score) Strategy");
   logger.info("═══════════════════════════════════════════");
 
-  // 1. Load and validate configuration
   const config = getConfig();
   logger.info(
     {
       window: config.strategy.marketWindow,
-      threshold: config.strategy.entryPriceThreshold,
+      zEntryThreshold: config.strategy.zEntryThreshold,
       maxEntryPrice: config.strategy.maxEntryPrice,
-      tradeWindowSec: config.strategy.tradeFromWindowSeconds,
+      entryFromWindowSec: config.strategy.entryFromWindowSeconds,
+      sigmaWindowMs: config.strategy.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
       maxPositions: config.strategy.maxSimultaneousPositions,
-      minBtcDistance: config.strategy.minBtcDistanceUsd,
-      stopLoss: config.strategy.stopLossEnabled
-        ? config.strategy.stopLossPriceTrigger
-        : "disabled",
+      recrossExit: config.strategy.recrossExitEnabled,
     },
     "Configuration loaded",
   );
 
-  // 2. Connect to database
   await connectDatabase();
 
-  // 3. Start BTC price watcher (RTDS WebSocket)
   const btcWatcher = getBtcPriceWatcher();
   btcWatcher.start();
   logger.info("BTC price watcher started");
 
-  // 4. Start market orchestrator (scanner + WS + strategy + execution)
   const orchestrator = getMarketOrchestrator();
   await orchestrator.start();
 
-  // 5. Start API server
   const apiServer = getApiServer();
   await apiServer.start();
 
   logger.info("All systems operational ✓");
 
-  // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "Shutdown signal received");
 

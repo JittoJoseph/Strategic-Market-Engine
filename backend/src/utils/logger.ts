@@ -37,7 +37,6 @@ export function getLogger(): pino.Logger {
   return loggerInstance;
 }
 
-// Create child loggers for different modules
 export function createModuleLogger(moduleName: string): pino.Logger {
   return getLogger().child({ module: moduleName });
 }

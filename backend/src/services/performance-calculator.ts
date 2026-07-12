@@ -56,7 +56,6 @@ export async function calculatePortfolioPerformance(
   const db = getDb();
   const periodStart = getPeriodStart(period);
 
-  // Build conditions
   const conditions = [];
   if (periodStart) {
     conditions.push(gte(schema.simulatedTrades.entryTs, periodStart));
@@ -72,7 +71,6 @@ export async function calculatePortfolioPerformance(
       ? await baseQuery.where(and(...conditions))
       : await baseQuery;
 
-  // Load portfolio state for ROI calculation
   const portfolio = await getPortfolio();
   const cashBalance = portfolio
     ? new Decimal(portfolio.cashBalance)
@@ -116,7 +114,6 @@ export async function calculatePortfolioPerformance(
       }
     } else if (trade.status === "OPEN") {
       openPositions++;
-      // Calculate unrealized P&L using live prices
       if (livePriceMap && trade.tokenId) {
         const currentPrice = livePriceMap.get(trade.tokenId);
         if (currentPrice !== undefined) {
@@ -140,7 +137,6 @@ export async function calculatePortfolioPerformance(
   const winRate =
     closedTrades > 0 ? ((wins / closedTrades) * 100).toFixed(2) : "0.00";
 
-  // ROI = (portfolioValue - initialCapital) / initialCapital × 100
   const portfolioValue = cashBalance.plus(positionsValue);
   const roi = initialCapital.gt(0)
     ? portfolioValue

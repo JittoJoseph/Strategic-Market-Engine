@@ -5,8 +5,6 @@ import { eq } from "drizzle-orm";
 
 const logger = createModuleLogger("monte-carlo");
 
-//  Types
-
 export interface MonteCarloConfig {
   /** Number of simulated equity curves to generate */
   simulations: number;
@@ -72,8 +70,6 @@ export interface MonteCarloResult {
   startingCapital: number;
 }
 
-//  Helpers
-
 /** Value at percentile p (0-100) of a pre-sorted array. */
 function pctile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -109,8 +105,6 @@ function buildHistogram(
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
 
-//  Constants
-
 const DEFAULT_CONFIG: MonteCarloConfig = {
   simulations: 10_000,
   tradesPerSim: 100,
@@ -118,17 +112,10 @@ const DEFAULT_CONFIG: MonteCarloConfig = {
 
 const CURVE_PERCENTILES = [5, 25, 50, 75, 95] as const;
 
-//  Core
-
 /**
- * Run a full Monte Carlo analysis over all settled trades.
- *
- * Realised PnL (not exitOutcome) drives win/loss classification so
- * stop-loss exits that clear the entry price are still counted as wins.
- *
- * All three result arrays (finalBalances, curves, maxDrawdowns) are
- * held in a single co-sorted array so percentile indices stay
- * consistent throughout and no secondary sort is needed for curves.
+ * Monte Carlo analysis over all settled trades. Realized PnL (not exitOutcome)
+ * drives win/loss classification, so an early exit that clears the entry price
+ * still counts as a win.
  */
 export async function runMonteCarloAnalysis(
   overrides?: Partial<MonteCarloConfig>,
@@ -136,7 +123,6 @@ export async function runMonteCarloAnalysis(
   const config: MonteCarloConfig = { ...DEFAULT_CONFIG, ...overrides };
   const db = getDb();
 
-  //  1. Load settled trades (only the two columns we need)
   const rows = await db
     .select({
       realizedPnl: schema.simulatedTrades.realizedPnl,
@@ -149,17 +135,16 @@ export async function runMonteCarloAnalysis(
     throw new Error("No settled trades to analyse  need historical data");
   }
 
-  //  2. Compute historical statistics in a single pass
   const pnlPool: number[] = [];
 
   let winCount = 0;
   let lossCount = 0;
   let totalWin = 0;
-  let totalLoss = 0; // negative sum
+  let totalLoss = 0;
   let sumWinPct = 0;
   let sumLossPct = 0;
   let largestWin = 0;
-  let largestLoss = 0; // most-negative value
+  let largestLoss = 0;
 
   for (const row of rows) {
     const pnl = parseFloat(row.realizedPnl ?? "0");
@@ -192,16 +177,13 @@ export async function runMonteCarloAnalysis(
     totalLossAbs > 0 ? totalWin / totalLossAbs : totalWin > 0 ? Infinity : 0;
   const expectancy = pnlPool.reduce((s, v) => s + v, 0) / n;
 
-  //  3. Starting capital
   const portfolio = await getPortfolio();
   const startingCapital = portfolio
     ? parseFloat(portfolio.initialCapital)
     : 100;
 
-  //  4. Monte Carlo simulations
-  // Store all three result dimensions together so a single sort keeps
-  // them aligned  avoids the index-drift bug that occurs when
-  // finalBalances is sorted in-place separately from allCurves.
+  // Keep each sim's three dimensions together so a single sort stays aligned,
+  // avoiding index drift between finalBalances and the curves.
   type Sim = { finalBalance: number; maxDrawdown: number; curve: Float64Array };
   const sims: Sim[] = new Array(config.simulations);
 
@@ -223,17 +205,14 @@ export async function runMonteCarloAnalysis(
     sims[s] = { finalBalance: balance, maxDrawdown: maxDD, curve };
   }
 
-  //  5. Co-sort simulations by final balance
   sims.sort((a, b) => a.finalBalance - b.finalBalance);
 
   const sortedFinalBalances = sims.map((s) => s.finalBalance);
 
-  // Drawdown percentiles use their own sort order
   const sortedMaxDrawdowns = sims
     .map((s) => s.maxDrawdown)
     .sort((a, b) => a - b);
 
-  //  6. Distribution statistics
   let sum = 0;
   for (const b of sortedFinalBalances) sum += b;
   const mean = sum / config.simulations;
@@ -248,11 +227,9 @@ export async function runMonteCarloAnalysis(
   let ruinCount = 0;
   for (const dd of sortedMaxDrawdowns) if (dd > 50) ruinCount++;
 
-  //  7. Histogram (O(N) single-pass)
   const histogram = buildHistogram(sortedFinalBalances);
 
-  //  8. Equity curves at key percentiles
-  // sims[] is sorted by finalBalance so we index directly.
+  // sims[] is sorted by finalBalance, so index directly for each percentile.
   const equityCurves: PercentileEquityCurve[] = CURVE_PERCENTILES.map((p) => {
     const idx = Math.min(
       Math.floor((p / 100) * config.simulations),

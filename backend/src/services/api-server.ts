@@ -17,13 +17,10 @@ import {
   type TimePeriod,
 } from "./performance-calculator.js";
 import { runMonteCarloAnalysis } from "./monte-carlo.js";
-import type { Crossover } from "./strategy-engine.js";
 
 const logger = createModuleLogger("api-server");
 
-/**
- * Express API server + WebSocket broadcast for real-time frontend updates.
- */
+/** Express API server + WebSocket broadcast for real-time frontend updates. */
 export class ApiServer {
   private app: express.Application;
   private server: Server | null = null;
@@ -41,13 +38,11 @@ export class ApiServer {
     const config = getConfig();
     this.server = createServer(this.app);
 
-    // WebSocket server for real-time updates
     this.wss = new WebSocketServer({ server: this.server, path: "/ws" });
     this.wss.on("connection", (ws) => {
       logger.debug("Frontend WS client connected");
 
-      // Respond to application-level PING with PONG so the frontend can
-      // confirm true end-to-end WS connectivity.
+      // Reply to app-level ping so the frontend can confirm end-to-end connectivity.
       ws.on("message", (raw) => {
         try {
           const msg = JSON.parse(raw.toString()) as { type?: string };
@@ -55,17 +50,15 @@ export class ApiServer {
             ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
           }
         } catch {
-          // ignore non-JSON (e.g. raw PING frames)
+          /* ignore non-JSON frames */
         }
       });
 
       ws.on("close", () => logger.debug("Frontend WS client disconnected"));
     });
 
-    // Periodic broadcast of system state + BTC price
     this.broadcastInterval = setInterval(() => this.broadcastState(), 2000);
 
-    // Wire orchestrator events to WS broadcast
     const orchestrator = getMarketOrchestrator();
     orchestrator.on("tradeOpened", (data) =>
       this.broadcast({ type: "tradeOpened", data }),
@@ -74,18 +67,12 @@ export class ApiServer {
       this.broadcast({ type: "tradeResolved", data }),
     );
 
-    // BTC price updates — also carry the latest momentum signal so the
-    // frontend gets real-time momentum updates on every tick, not just every 2s.
+    // Carry sigmaPerSec on each BTC tick so the frontend updates it in real time.
     const btcWatcher = getBtcPriceWatcher();
     btcWatcher.on("btcPriceUpdate", (data) => {
       const config = getConfig();
-      const momentum = config.strategy.momentumEnabled
-        ? btcWatcher.getMomentum(
-            config.strategy.momentumLookbackMs,
-            config.strategy.momentumMinChangeUsd,
-          )
-        : null;
-      this.broadcast({ type: "btcPriceUpdate", data: { ...data, momentum } });
+      const sigmaPerSec = btcWatcher.getRealizedVol(config.strategy.sigmaWindowMs);
+      this.broadcast({ type: "btcPriceUpdate", data: { ...data, sigmaPerSec } });
     });
 
     return new Promise((resolve) => {
@@ -145,7 +132,6 @@ export class ApiServer {
   }
 
   private setupRoutes(): void {
-    // Health / ping
     this.app.get("/ping", (_req, res) => res.json({ message: "pong" }));
     this.app.get("/health", (_req, res) => {
       const orchestrator = getMarketOrchestrator();
@@ -157,7 +143,6 @@ export class ApiServer {
       });
     });
 
-    // System stats
     this.app.get(["/api/system/stats", "/api/stats"], async (_req, res) => {
       try {
         const orchestrator = getMarketOrchestrator();
@@ -169,22 +154,14 @@ export class ApiServer {
           btcPrice: btcWatcher.getCurrentPrice(),
           config: {
             marketWindow: config.strategy.marketWindow,
-            entryPriceThreshold: config.strategy.entryPriceThreshold,
+            zEntryThreshold: config.strategy.zEntryThreshold,
             maxEntryPrice: config.strategy.maxEntryPrice,
-            tradeFromWindowSeconds: config.strategy.tradeFromWindowSeconds,
+            entryFromWindowSeconds: config.strategy.entryFromWindowSeconds,
+            sigmaWindowMs: config.strategy.sigmaWindowMs,
+            minEntryEdge: config.strategy.minEntryEdge,
+            recrossExitEnabled: config.strategy.recrossExitEnabled,
             startingCapital: config.portfolio.startingCapital,
             maxPositions: config.strategy.maxSimultaneousPositions,
-            minBtcDistanceUsd: config.strategy.minBtcDistanceUsd,
-            stopLossEnabled: config.strategy.stopLossEnabled,
-            stopLossPriceTrigger: config.strategy.stopLossPriceTrigger,
-            takeProfitEnabled: config.strategy.takeProfitEnabled,
-            takeProfitTriggerPrice: config.strategy.takeProfitTriggerPrice,
-            momentumEnabled: config.strategy.momentumEnabled,
-            momentumLookbackMs: config.strategy.momentumLookbackMs,
-            momentumMinChangeUsd: config.strategy.momentumMinChangeUsd,
-            oscillationFilterEnabled: config.strategy.oscillationFilterEnabled,
-            oscillationWindowMs: config.strategy.oscillationWindowMs,
-            oscillationMaxCrossovers: config.strategy.oscillationMaxCrossovers,
             consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
             riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
             riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,
@@ -196,9 +173,7 @@ export class ApiServer {
       }
     });
 
-    // Active market — returns the primary market (prioritizes by recency and status:
-    // ACTIVE > ENDED > UPCOMING). Sources from in-memory orchestrator state so it
-    // includes real-time prices and btcPriceAtWindowStart. Returns 204 if none.
+    // Primary live market, preferring ACTIVE > ENDED > most-recent UPCOMING.
     this.app.get("/api/active-market", (_req, res) => {
       const orchestrator = getMarketOrchestrator();
       const liveMarkets = orchestrator.getLiveMarkets();
@@ -208,21 +183,18 @@ export class ApiServer {
         return;
       }
 
-      // Sort by recency (most recent end date first)
       liveMarkets.sort(
         (a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime(),
       );
 
-      // Prioritize by status: ACTIVE > ENDED > UPCOMING
       const primary =
         liveMarkets.find((m) => m.status === "ACTIVE") ??
         liveMarkets.find((m) => m.status === "ENDED") ??
-        liveMarkets[0]; // Most recent UPCOMING as fallback
+        liveMarkets[0];
 
       res.json(primary);
     });
 
-    // Markets list — full DB-backed list of recent discovered markets.
     this.app.get("/api/markets", async (req, res) => {
       try {
         const db = getDb();
@@ -296,7 +268,6 @@ export class ApiServer {
       }
     });
 
-    // Trades
     this.app.get("/api/trades", async (req: Request, res: Response) => {
       try {
         const db = getDb();
@@ -315,7 +286,6 @@ export class ApiServer {
             marketEndDate: schema.markets.endDate,
             marketSlug: schema.markets.slug,
             marketQuestion: schema.markets.question,
-            marketMetadata: schema.markets.metadata,
           })
           .from(schema.simulatedTrades)
           .leftJoin(
@@ -332,27 +302,12 @@ export class ApiServer {
             : await baseQuery;
 
         res.json(
-          rows.map((r) => {
-            const crossovers = (r.marketMetadata as any)?.crossovers as
-              | Crossover[]
-              | undefined;
-            const entryTs = new Date(r.trade.entryTs).getTime();
-            const last60sCrossovers =
-              crossovers?.filter((c) => c.ts >= entryTs - 60_000) || [];
-            const allCrossovers = crossovers || [];
-
-            return {
-              ...r.trade,
-              marketEndDate: r.marketEndDate ?? null,
-              marketSlug: r.marketSlug ?? null,
-              marketQuestion: r.marketQuestion ?? null,
-              crossovers: {
-                all: allCrossovers.length,
-                last60s: last60sCrossovers.length,
-                details: allCrossovers, // Send full details for hover
-              },
-            };
-          }),
+          rows.map((r) => ({
+            ...r.trade,
+            marketEndDate: r.marketEndDate ?? null,
+            marketSlug: r.marketSlug ?? null,
+            marketQuestion: r.marketQuestion ?? null,
+          })),
         );
       } catch (error) {
         logger.error({ error }, "Trades error");
@@ -360,7 +315,6 @@ export class ApiServer {
       }
     });
 
-    // Performance
     this.app.get("/api/performance", async (req: Request, res: Response) => {
       try {
         const period = (req.query.period as TimePeriod) || "ALL";
@@ -384,7 +338,6 @@ export class ApiServer {
       }
     });
 
-    // Audit log
     this.app.get("/api/audit", async (req: Request, res: Response) => {
       try {
         const db = getDb();
@@ -400,7 +353,6 @@ export class ApiServer {
       }
     });
 
-    // Admin: wipe — clears all trade data and resets portfolio
     this.app.delete(
       "/api/admin/wipe",
       (req, res, next) => this.adminAuth(req, res, next),
@@ -408,13 +360,11 @@ export class ApiServer {
         try {
           const config = getConfig();
 
-          // Pause the orchestrator first — stops scanner, halts new trades
           const orchestrator = getMarketOrchestrator();
           orchestrator.pause();
 
           await wipeAndResetPortfolio(config.portfolio.startingCapital);
 
-          // Also clear markets
           const db = getDb();
           await db.delete(schema.markets);
 
@@ -431,7 +381,6 @@ export class ApiServer {
       },
     );
 
-    // Admin: pause — stop new trades, keep existing positions tracked
     this.app.post(
       "/api/admin/pause",
       (req, res, next) => this.adminAuth(req, res, next),
@@ -442,7 +391,6 @@ export class ApiServer {
       },
     );
 
-    // Admin: resume — resume trading after a pause
     this.app.post(
       "/api/admin/resume",
       (req, res, next) => this.adminAuth(req, res, next),
@@ -458,7 +406,6 @@ export class ApiServer {
       },
     );
 
-    // Portfolio state
     this.app.get("/api/portfolio", async (_req: Request, res: Response) => {
       try {
         const portfolio = await getPortfolio();
@@ -490,7 +437,6 @@ export class ApiServer {
       }
     });
 
-    // Monte Carlo analysis
     this.app.get("/api/analysis", async (req: Request, res: Response) => {
       try {
         const simulations = parseInt(req.query.simulations as string) || 10_000;
@@ -510,9 +456,6 @@ export class ApiServer {
     });
   }
 
-  /**
-   * Broadcast a message to all connected WebSocket clients.
-   */
   private broadcast(message: unknown): void {
     if (!this.wss) return;
     const data = JSON.stringify(message);
@@ -523,9 +466,6 @@ export class ApiServer {
     }
   }
 
-  /**
-   * Periodically broadcast system state.
-   */
   private broadcastState(): void {
     const orchestrator = getMarketOrchestrator();
     const btcWatcher = getBtcPriceWatcher();
@@ -548,7 +488,6 @@ export class ApiServer {
   }
 }
 
-// Singleton
 let instance: ApiServer | null = null;
 export function getApiServer(): ApiServer {
   if (!instance) instance = new ApiServer();

@@ -1,44 +1,25 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
-import {
-  WINDOW_CONFIGS,
-  type GammaMarket,
-  type WindowConfig,
-} from "../types/index.js";
+import { WINDOW_CONFIGS, type WindowConfig } from "../types/index.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 
 const logger = createModuleLogger("market-scanner");
 
 /**
- * Discovers BTC markets for the configured window type from Polymarket.
- *
- * Uses **deterministic slug computation** to always find the correct markets.
- * BTC 5-minute window slugs follow the pattern:
- *   btc-updown-5m-{UNIX_TIMESTAMP}
- * where UNIX_TIMESTAMP is the window START time (seconds), aligned to round
- * 5-minute boundaries:
- *   windowStart = Math.floor(now / 300) * 300
- *
- * On every scan cycle we compute the current + next N window slugs, PLUS
- * recent past windows, fetch those exact markets from the Gamma /markets API,
- * catalog them in the DB, and emit them for the orchestrator.  The orchestrator
- * deduplicates via its own activeMarkets Map — no in-memory knownMarketIds set
- * needed here.
- *
- * Emits:
- *   "newMarket" — { market: GammaMarket }
+ * Discovers BTC window markets by deterministic slug. BTC 5-minute slugs follow
+ * `btc-updown-5m-{unixWindowStart}`, where the window start is aligned to a round
+ * boundary: `Math.floor(now / 300) * 300`. Each scan fetches recent-past, current,
+ * and upcoming window slugs and emits any newly-seen market.
  */
 export class MarketScanner extends EventEmitter {
   private client: PolymarketClient;
   private scanInterval: NodeJS.Timeout | null = null;
   private discoveredCount = 0;
   private running = false;
-  private catalogedMarketIds = new Map<string, number>();
+  private seenMarketIds = new Map<string, number>();
 
-  /** How many future windows to pre-fetch alongside the current one */
   private static readonly LOOKAHEAD_WINDOWS = 3;
-  /** How many past windows to check for existing markets */
   private static readonly LOOKBEHIND_WINDOWS = 2;
 
   constructor() {
@@ -89,10 +70,6 @@ export class MarketScanner extends EventEmitter {
     return this.discoveredCount;
   }
 
-  /**
-   * Compute deterministic window-start timestamps for past, current + upcoming
-   * windows. For 5M windows: floor(now / 300) * 300 = current window start.
-   */
   private computeWindowSlugs(windowConfig: WindowConfig): string[] {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const durationSeconds = windowConfig.durationMs / 1000;
@@ -101,13 +78,11 @@ export class MarketScanner extends EventEmitter {
 
     const slugs: string[] = [];
 
-    // Include recent past windows
     for (let i = MarketScanner.LOOKBEHIND_WINDOWS; i > 0; i--) {
       const windowStart = currentWindowStart - i * durationSeconds;
       slugs.push(`${windowConfig.slugPrefix}-${windowStart}`);
     }
 
-    // Include current and future windows
     for (let i = 0; i < MarketScanner.LOOKAHEAD_WINDOWS; i++) {
       const windowStart = currentWindowStart + i * durationSeconds;
       slugs.push(`${windowConfig.slugPrefix}-${windowStart}`);
@@ -130,21 +105,12 @@ export class MarketScanner extends EventEmitter {
       let newMarketsFound = 0;
 
       for (const market of markets) {
-        // Verify this is actually a market for our configured window type
         if (!market.slug?.startsWith(windowConfig.slugPrefix)) continue;
-
-        // Skip already-closed markets (resolved by oracle)
         if (market.closed) continue;
 
-        // Catalog into DB (idempotent — INSERT ON CONFLICT DO NOTHING)
-        const wasNew = await this.catalogMarket(market, windowConfig);
-        if (wasNew) {
+        if (this.markSeen(market.id)) {
           this.discoveredCount++;
           newMarketsFound++;
-        }
-
-        // Only emit for truly new markets — orchestrator still deduplicates
-        if (wasNew) {
           this.emit("newMarket", { market });
         }
       }
@@ -165,41 +131,26 @@ export class MarketScanner extends EventEmitter {
     }
   }
 
-  /**
-   * Catalog a discovered market into the database (INSERT only, no UPDATE).
-   * Returns true if the market was truly new (inserted), false if it already existed.
-   */
-  private async catalogMarket(
-    market: GammaMarket,
-    windowConfig: WindowConfig,
-  ): Promise<boolean> {
-    try {
-      const now = Date.now();
-      if (this.catalogedMarketIds.has(market.id)) {
-        this.catalogedMarketIds.set(market.id, now);
-        return false;
-      }
-      this.catalogedMarketIds.set(market.id, now);
-
-      // Memory cleanup: prune markets we haven't seen in the scan results for over an hour
-      if (this.catalogedMarketIds.size > 100) {
-        const threshold = now - 60 * 60 * 1000; // 1 hour ago
-        for (const [id, lastSeen] of this.catalogedMarketIds.entries()) {
-          if (lastSeen < threshold) {
-            this.catalogedMarketIds.delete(id);
-          }
-        }
-      }
-
-      return true;
-    } catch (error) {
-      logger.error({ error, marketId: market.id }, "Failed to catalog market");
+  /** Records a market id and returns true only the first time it is seen. */
+  private markSeen(marketId: string): boolean {
+    const now = Date.now();
+    if (this.seenMarketIds.has(marketId)) {
+      this.seenMarketIds.set(marketId, now);
       return false;
     }
+    this.seenMarketIds.set(marketId, now);
+
+    if (this.seenMarketIds.size > 100) {
+      const threshold = now - 60 * 60 * 1000;
+      for (const [id, lastSeen] of this.seenMarketIds.entries()) {
+        if (lastSeen < threshold) this.seenMarketIds.delete(id);
+      }
+    }
+
+    return true;
   }
 }
 
-// Singleton
 let instance: MarketScanner | null = null;
 export function getMarketScanner(): MarketScanner {
   if (!instance) instance = new MarketScanner();

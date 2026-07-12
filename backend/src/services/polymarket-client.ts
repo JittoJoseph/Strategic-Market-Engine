@@ -4,11 +4,9 @@ import { withRetry, isRateLimitError } from "../utils/retry.js";
 import {
   POLY_URLS,
   GammaMarketSchema,
-  GammaEventSchema,
   OrderbookSchema,
   MidpointResponseSchema,
   type GammaMarket,
-  type GammaEvent,
   type Orderbook,
   type MidpointResponse,
 } from "../types/index.js";
@@ -75,15 +73,7 @@ export class PolymarketClient {
     return { ...this.requestCounts };
   }
 
-  // ============================================
-  // Gamma API — Market Discovery
-  // ============================================
-
-  /**
-   * Fetch markets from the Gamma /markets endpoint.
-   * Supports slug array for deterministic lookups:
-   *   getMarkets({ slug: ["btc-updown-5m-1771705500", "btc-updown-5m-1771705800"] })
-   */
+  /** Fetch markets from Gamma /markets. `slug` may be an array for multi-lookup. */
   async getMarkets(
     options: {
       slug?: string[];
@@ -99,7 +89,6 @@ export class PolymarketClient {
   ): Promise<GammaMarket[]> {
     return withRetry(
       async () => {
-        // Use URLSearchParams for proper multi-value slug support (slug=a&slug=b)
         const params = new URLSearchParams();
         if (options.limit !== undefined)
           params.append("limit", options.limit.toString());
@@ -136,8 +125,6 @@ export class PolymarketClient {
   async getMarketById(marketId: string): Promise<GammaMarket | null> {
     return withRetry(
       async () => {
-        // Gamma currently serves single-market lookup at /markets/{id}.
-        // Keep a query-param fallback for compatibility if API behavior changes.
         try {
           const response = await this.gammaApi.get(
             `/markets/${encodeURIComponent(marketId)}`,
@@ -158,10 +145,6 @@ export class PolymarketClient {
       { maxRetries: 3, retryOn: isRateLimitError },
     );
   }
-
-  // ============================================
-  // CLOB API — Orderbook, Pricing, Fees
-  // ============================================
 
   async getOrderbook(
     tokenId: string,
@@ -190,10 +173,6 @@ export class PolymarketClient {
       { maxRetries: 3, retryOn: isRateLimitError },
     );
   }
-
-  // ============================================
-  // Helpers
-  // ============================================
 
   static parseClobTokenIds(market: GammaMarket): string[] {
     if (!market.clobTokenIds) return [];
@@ -226,15 +205,11 @@ export class PolymarketClient {
   }
 
   /**
-   * Parse the BTC target price from the market question text.
-   * Example questions:
-   *   "Will BTC be above $97,450.00 at 2026-02-21 15:05 UTC?"
-   *   "Will Bitcoin price be above $98,200 at ..."
-   * Returns null if not parseable.
+   * Parse the BTC target price from question text, e.g.
+   * "Will BTC be above $97,450.00 at ...?". Returns null if not present.
    */
   static parseTargetPrice(question: string | null | undefined): number | null {
     if (!question) return null;
-    // Match dollar amounts with optional commas and decimals
     const match = question.match(/(?:above|below)\s*\$([0-9,]+(?:\.\d+)?)/i);
     if (!match) return null;
     const priceStr = match[1]!.replace(/,/g, "");
@@ -243,7 +218,6 @@ export class PolymarketClient {
   }
 }
 
-// Singleton
 let clientInstance: PolymarketClient | null = null;
 export function getPolymarketClient(): PolymarketClient {
   if (!clientInstance) clientInstance = new PolymarketClient();
