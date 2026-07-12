@@ -144,15 +144,15 @@ describe("StrategyEngine (barrier / z-score)", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("does NOT trigger when the book does not price the token as favorite (mid < 0.5)", () => {
+  it("does NOT trigger when there is no liftable ask within the price ceiling", () => {
     const endDate = new Date(Date.now() + 30_000);
     engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
 
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    // Even though z clears, mid = 0.45 < 0.5 → skip
-    engine.evaluatePrice("token-up", 0.4, 0.5, btcPrice, SIGMA_PASS);
+    // Near-certain favorite: empty ask side surfaces as bestAsk = 1.0 > maxEntryPrice → skip
+    engine.evaluatePrice("token-up", 0.99, 1.0, btcPrice, SIGMA_PASS);
     expect(handler).not.toHaveBeenCalled();
   });
 

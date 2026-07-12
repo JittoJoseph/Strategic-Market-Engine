@@ -158,7 +158,10 @@ export class StrategyEngine extends EventEmitter {
     const secondsToEnd = (market.endDate.getTime() - Date.now()) / 1000;
 
     // Only trade the final stretch of the window, never after close.
-    if (secondsToEnd <= 0 || secondsToEnd > config.strategy.entryFromWindowSeconds)
+    if (
+      secondsToEnd <= 0 ||
+      secondsToEnd > config.strategy.entryFromWindowSeconds
+    )
       return;
 
     if (!btcPriceData || btcPriceData.price <= 0) return;
@@ -176,11 +179,10 @@ export class StrategyEngine extends EventEmitter {
     const z = signedDistanceUsd / (sigmaPerSec * Math.sqrt(secondsToEnd));
     if (z < config.strategy.zEntryThreshold) return;
 
-    // The book must also price this side as the favorite.
-    if (midpoint < 0.5) return;
+    if (bestAsk <= 0 || bestAsk > config.strategy.maxEntryPrice) return;
 
     const fairValue = barrierFairValue(z);
-    if (fairValue - midpoint < config.strategy.minEntryEdge) return;
+    if (fairValue - bestAsk < config.strategy.minEntryEdge) return;
 
     if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
       return;
