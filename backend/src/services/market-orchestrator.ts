@@ -68,9 +68,9 @@ interface OpenPosition {
   /** Cash spent (shares × avgPrice + fees); the cost basis for portfolio value. */
   actualCost: number;
   marketEndDate: Date;
-  /** Window-start strike this position resolves against, for recross detection. */
+  /** Window-start strike this position resolves against, for offside-exit detection. */
   strike: number | null;
-  recrossTriggered?: boolean;
+  exitTriggered?: boolean;
 }
 
 /**
@@ -379,7 +379,7 @@ export class MarketOrchestrator extends EventEmitter {
 
     this.btcWatcher.on("btcPriceUpdate", (data) => {
       this.tryFillBtcWindowStart();
-      this.checkRecrossExits(data.price);
+      this.checkOffsideExits(data.price);
     });
 
     this.strategyEngine.on("opportunityDetected", (opp: MarketOpportunity) => {
@@ -844,48 +844,66 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   /**
-   * Exit any open position whose favored side has flipped — BTC has crossed back
-   * through the strike against us, the real adverse event for a barrier trade.
-   * Only fires while the window is open; after close the outcome is locked at the
-   * Chainlink end price, so further BTC moves are irrelevant.
+   * Exit a position when BTC has moved offside of the strike by more than the
+   * volatility barrier for the time remaining — a recovery would require a move
+   * larger than ~offsideExitK standard deviations of what BTC can plausibly do
+   * before the window closes. A bare strike cross is left alone: it sits in the
+   * noise band and usually reverts. Fires only while the window is open; after
+   * close the Chainlink outcome is locked and further BTC moves are irrelevant.
    */
-  private checkRecrossExits(btcPrice: number): void {
+  private checkOffsideExits(btcPrice: number): void {
     const config = getConfig();
-    if (!config.strategy.recrossExitEnabled) return;
+    if (!config.strategy.offsideExitEnabled) return;
     if (this.openPositions.size === 0) return;
 
     const now = Date.now();
+    const sigma = this.btcWatcher.getRealizedVol(config.strategy.sigmaWindowMs);
+
     for (const [tradeId, pos] of this.openPositions) {
-      if (pos.recrossTriggered) continue;
+      if (pos.exitTriggered) continue;
       if (pos.strike === null) continue;
-      if (pos.marketEndDate.getTime() <= now) continue; // window closed — outcome locked
 
-      const favoredNow: "Up" | "Down" = btcPrice >= pos.strike ? "Up" : "Down";
-      if (favoredNow === pos.outcomeLabel) continue; // still on our side
+      const secondsLeft = (pos.marketEndDate.getTime() - now) / 1000;
+      if (secondsLeft <= 0) continue; // window closed — outcome locked
 
-      pos.recrossTriggered = true;
+      const signedDistance =
+        pos.outcomeLabel === "Up" ? btcPrice - pos.strike : pos.strike - btcPrice;
+      if (signedDistance >= 0) continue; // still onside
+
+      // Move BTC could plausibly make in the time left. If sigma is unknown, fall
+      // back to exiting on any offside (conservative).
+      const barrier =
+        sigma && sigma > 0
+          ? config.strategy.offsideExitK * sigma * Math.sqrt(secondsLeft)
+          : 0;
+      if (-signedDistance < barrier) continue; // offside but within noise — hold
+
+      pos.exitTriggered = true;
       logger.warn(
         {
           tradeId,
           outcome: pos.outcomeLabel,
           strike: pos.strike.toFixed(2),
           btcPrice: btcPrice.toFixed(2),
+          offsideUsd: (-signedDistance).toFixed(2),
+          barrierUsd: barrier.toFixed(2),
+          secondsLeft: secondsLeft.toFixed(1),
         },
-        "Recross detected: BTC crossed back through strike — exiting",
+        "Offside barrier breached — exiting",
       );
-      this.executeRecrossExit(tradeId, pos).catch((err) => {
-        logger.error({ err, tradeId }, "Recross exit failed");
+      this.executeOffsideExit(tradeId, pos).catch((err) => {
+        logger.error({ err, tradeId }, "Offside exit failed");
         const p = this.openPositions.get(tradeId);
-        if (p) p.recrossTriggered = false;
+        if (p) p.exitTriggered = false;
       });
     }
   }
 
   /**
    * FAK market-sell the position into the live book (accept any bid), classify
-   * by realized PnL, and settle the trade with reason RECROSS.
+   * by realized PnL, and settle the trade with reason OFFSIDE.
    */
-  private async executeRecrossExit(
+  private async executeOffsideExit(
     tradeId: string,
     pos: OpenPosition,
   ): Promise<void> {
@@ -908,7 +926,7 @@ export class MarketOrchestrator extends EventEmitter {
         if (sellResult.isPartialFill) {
           logger.warn(
             { tradeId, sold: sellResult.totalSharesSold, total: pos.entryShares },
-            "Recross exit partial fill — insufficient bid liquidity",
+            "Offside exit partial fill — insufficient bid liquidity",
           );
         }
       } else {
@@ -929,15 +947,15 @@ export class MarketOrchestrator extends EventEmitter {
       if (sellProceeds > 0) await this.portfolioManager.addCash(sellProceeds);
 
       await resolveTrade(tradeId, outcome, pnl.toFixed(6), exitPrice.toFixed(6), {
-        exitReason: "RECROSS",
+        exitReason: "OFFSIDE",
       });
       this.updateConsecutiveLossState(isWin);
       this.untrackPosition(tradeId);
 
       await logAudit(
         "warn",
-        "RECROSS_EXIT",
-        `Recross exit for trade ${tradeId}: exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
+        "OFFSIDE_EXIT",
+        `Offside exit for trade ${tradeId}: exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
         {
           tradeId,
           tokenId: pos.tokenId,
@@ -959,19 +977,19 @@ export class MarketOrchestrator extends EventEmitter {
           pnl: pnl.toFixed(4),
           classification: outcome,
         },
-        "🔀 Recross exit executed",
+        "🔀 Offside exit executed",
       );
 
       this.emit("tradeResolved", { tradeId, isWin, pnl, exitPrice, trade: null });
     } catch (error) {
-      logger.error({ error, tradeId }, "Recross exit execution error");
+      logger.error({ error, tradeId }, "Offside exit execution error");
       logAudit(
         "error",
         "SYSTEM",
-        `Recross exit error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Offside exit error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
       const position = this.openPositions.get(tradeId);
-      if (position) position.recrossTriggered = false;
+      if (position) position.exitTriggered = false;
     }
   }
 
@@ -1266,7 +1284,7 @@ export class MarketOrchestrator extends EventEmitter {
         fees: parseFloat(trade.entryFees ?? "0"),
         actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
-        // Restored from the trade's recorded window-start price, for recross detection.
+        // Restored from the trade's recorded window-start price, for offside-exit detection.
         strike: trade.btcTargetPrice ? parseFloat(trade.btcTargetPrice) : null,
       });
 

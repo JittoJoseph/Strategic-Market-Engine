@@ -23,7 +23,9 @@ async function main(): Promise<void> {
       sigmaWindowMs: config.strategy.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
       maxPositions: config.strategy.maxSimultaneousPositions,
-      recrossExit: config.strategy.recrossExitEnabled,
+      offsideExit: config.strategy.offsideExitEnabled
+        ? `k=${config.strategy.offsideExitK}`
+        : "disabled",
     },
     "Configuration loaded",
   );

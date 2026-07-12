@@ -144,7 +144,7 @@ export async function resolveTrade(
   realizedPnl: string,
   exitPrice?: string,
   extras?: {
-    exitReason?: "RESOLUTION" | "RECROSS" | "FORCE_TIMEOUT";
+    exitReason?: "RESOLUTION" | "OFFSIDE" | "FORCE_TIMEOUT";
   },
 ) {
   const database = getDb();

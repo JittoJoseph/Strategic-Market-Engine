@@ -342,12 +342,14 @@ export function DashboardPage() {
                     value={stats.config.minEntryEdge.toString()}
                   />
                   <StatRow
-                    label="Recross Exit"
+                    label="Offside Exit"
                     value={
-                      stats.config.recrossExitEnabled ? "ENABLED" : "DISABLED"
+                      stats.config.offsideExitEnabled
+                        ? `k=${stats.config.offsideExitK}`
+                        : "DISABLED"
                     }
-                    accent={stats.config.recrossExitEnabled}
-                    warn={!stats.config.recrossExitEnabled}
+                    accent={stats.config.offsideExitEnabled}
+                    warn={!stats.config.offsideExitEnabled}
                   />
                   <StatRow
                     label="Max Positions"
