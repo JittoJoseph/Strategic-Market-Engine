@@ -2,32 +2,54 @@ import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import type { BtcPriceData } from "../interfaces/websocket-types.js";
-import type { MomentumSignal } from "../types/index.js";
 
 const logger = createModuleLogger("strategy-engine");
 
-/** Opportunity detected by the strategy engine */
+/**
+ * Barrier fair value for the favorite: P(outcome does not reverse before expiry),
+ * as a driftless first-passage via the reflection principle, 1 - 2·Φ(-z).
+ * Capped at 0.995: BTC jump/fat-tail risk means a pure Gaussian understates the
+ * chance of reversal, so no entry is treated as more certain than ~99.5%.
+ */
+export function barrierFairValue(z: number): number {
+  if (z <= 0) return 0.5;
+  const fair = 1 - 2 * standardNormalCdf(-z);
+  return Math.max(0.5, Math.min(0.995, fair));
+}
+
+/** Standard normal CDF via erf approximation (Abramowitz & Stegun 7.1.26). */
+function standardNormalCdf(x: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989422804014327 * Math.exp(-(x * x) / 2);
+  const p =
+    d *
+    t *
+    (0.3193815 +
+      t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x >= 0 ? 1 - p : p;
+}
+
+/** Opportunity detected by the barrier strategy engine. */
 export interface MarketOpportunity {
   marketId: string;
   tokenId: string;
-  outcomeLabel: string; // "Up" or "Down"
+  outcomeLabel: string; // "Up" or "Down" — always the current favorite
   midpoint: number;
   bestAsk: number;
   bestBid: number;
   btcPrice: number;
-  btcTargetPrice: number;
-  btcDistanceUsd: number;
-
+  /** Window-start (strike) BTC price the market resolves against. */
+  strike: number;
+  /** Signed distance in favour of this outcome (always > 0 at entry). */
+  signedDistanceUsd: number;
+  /** BTC realized per-second volatility used for the z-score. */
+  sigmaPerSec: number;
+  /** Vol-adjusted distance to the strike: distance / (sigma·√secondsLeft). */
+  z: number;
+  /** Barrier-implied fair value of the favorite at entry. */
+  fairValue: number;
   secondsToEnd: number;
   trigger: string;
-  /** Momentum signal at time of entry (for logging/display) */
-  momentum: MomentumSignal | null;
-}
-
-/** A recorded BTC crossover of the market's target price */
-export interface Crossover {
-  side: "UP" | "DOWN";
-  ts: number;
 }
 
 interface TokenPriceState {
@@ -42,17 +64,25 @@ interface WatchedMarket {
   tokenId: string;
   outcomeLabel: string;
   endDate: Date;
-  targetPrice: number | null;
-  /** Timestamps when BTC crossed the target price */
-  crossovers: Crossover[];
-  /** Last known side of BTC relative to target — null until first BTC tick */
-  lastBtcSide: "UP" | "DOWN" | null;
+  /** BTC price at window open — the value the market resolves against. */
+  strike: number | null;
 }
 
+/**
+ * Barrier strategy engine.
+ *
+ * Edge: in the final seconds a BTC Up/Down market resolves on Chainlink
+ * end-vs-open, which we observe in real time — yet the thin CLOB reprices
+ * slowly, charging a roughly flat ~0.97 for the favorite regardless of how
+ * certain the outcome already is. When the favorite is many volatility-sigmas
+ * clear of the strike (high z), the true certainty is ~99%+ while the book
+ * still offers ~0.97, a persistent ~2% edge with a tiny tail. We enter only
+ * when that vol-adjusted cushion (z) clears a threshold.
+ */
 export class StrategyEngine extends EventEmitter {
   private priceStates: Map<string, TokenPriceState> = new Map();
-  private watchedMarkets: Map<string, WatchedMarket> = new Map(); // tokenId → market info
-  private evaluatedTokens: Set<string> = new Set(); // tokenId combos already triggered
+  private watchedMarkets: Map<string, WatchedMarket> = new Map(); // tokenId → market
+  private evaluatedTokens: Set<string> = new Set();
   private openPositionCount = 0;
   private triggersCount = 0;
 
@@ -61,16 +91,14 @@ export class StrategyEngine extends EventEmitter {
     tokenId: string,
     outcomeLabel: string,
     endDate: Date,
-    targetPrice: number | null,
+    strike: number | null,
   ): void {
     this.watchedMarkets.set(tokenId, {
       marketId,
       tokenId,
       outcomeLabel,
       endDate,
-      targetPrice,
-      crossovers: [],
-      lastBtcSide: null,
+      strike,
     });
   }
 
@@ -80,11 +108,10 @@ export class StrategyEngine extends EventEmitter {
     this.evaluatedTokens.delete(tokenId);
   }
 
-  updateTargetPrice(tokenId: string, targetPrice: number): void {
+  /** Set the window-start strike price once BTC is known (relative Up/Down markets). */
+  updateStrike(tokenId: string, strike: number): void {
     const market = this.watchedMarkets.get(tokenId);
-    if (market) {
-      market.targetPrice = targetPrice;
-    }
+    if (market) market.strike = strike;
   }
 
   setOpenPositionCount(count: number): void {
@@ -96,15 +123,6 @@ export class StrategyEngine extends EventEmitter {
     this.evaluatedTokens.delete(tokenId);
   }
 
-  resetForNewWindow(): void {
-    this.evaluatedTokens.clear();
-  }
-
-  /** Get crossover data for a token (for persistence before unregister). */
-  getCrossoverData(tokenId: string): Crossover[] | null {
-    return this.watchedMarkets.get(tokenId)?.crossovers ?? null;
-  }
-
   getStats() {
     return {
       watchedTokens: this.watchedMarkets.size,
@@ -113,12 +131,16 @@ export class StrategyEngine extends EventEmitter {
     };
   }
 
+  /**
+   * Evaluate a token on every price tick. Emits `opportunityDetected` when the
+   * token is the current favorite and its vol-adjusted cushion clears the gate.
+   */
   evaluatePrice(
     tokenId: string,
     bestBid: number,
     bestAsk: number,
     btcPriceData: BtcPriceData | null,
-    momentumSignal: MomentumSignal | null = null,
+    sigmaPerSec: number | null,
   ): void {
     const midpoint = (bestBid + bestAsk) / 2;
     this.priceStates.set(tokenId, {
@@ -130,61 +152,35 @@ export class StrategyEngine extends EventEmitter {
 
     const market = this.watchedMarkets.get(tokenId);
     if (!market) return;
-
-    // ── Track BTC crossovers on every tick (even if we bail out early) ──
-    if (btcPriceData && btcPriceData.price > 0 && market.targetPrice !== null) {
-      this.trackCrossover(market, btcPriceData.price);
-    }
-
     if (this.evaluatedTokens.has(tokenId)) return;
 
     const config = getConfig();
     const secondsToEnd = (market.endDate.getTime() - Date.now()) / 1000;
 
-    if (
-      secondsToEnd < 0 ||
-      secondsToEnd > config.strategy.tradeFromWindowSeconds
-    )
+    // Only trade the final stretch of the window, never after close.
+    if (secondsToEnd <= 0 || secondsToEnd > config.strategy.entryFromWindowSeconds)
       return;
-    if (midpoint < config.strategy.entryPriceThreshold) return;
-    if (midpoint > config.strategy.maxEntryPrice) {
-      logger.debug(
-        {
-          tokenId,
-          midpoint: midpoint.toFixed(4),
-          maxEntryPrice: config.strategy.maxEntryPrice.toFixed(4),
-        },
-        "Skipping: midpoint above maxEntryPrice ceiling",
-      );
-      return;
-    }
 
-    if (!btcPriceData || btcPriceData.price <= 0) {
-      logger.debug({ tokenId }, "Skipping: no BTC price");
-      return;
-    }
+    if (!btcPriceData || btcPriceData.price <= 0) return;
+    if (market.strike === null) return;
 
-    if (market.targetPrice === null) return;
+    // Distance in favour of this outcome; only the current favorite is eligible.
+    const signedDistanceUsd =
+      market.outcomeLabel === "Up"
+        ? btcPriceData.price - market.strike
+        : market.strike - btcPriceData.price;
+    if (signedDistanceUsd <= 0) return;
 
-    const btcDistanceUsd = Math.abs(btcPriceData.price - market.targetPrice);
+    if (sigmaPerSec === null || sigmaPerSec <= 0) return;
 
-    if (btcDistanceUsd < config.strategy.minBtcDistanceUsd) {
-      logger.debug(
-        { tokenId, btcDistanceUsd, min: config.strategy.minBtcDistanceUsd },
-        "Skipping: BTC too close to target",
-      );
-      return;
-    }
+    const z = signedDistanceUsd / (sigmaPerSec * Math.sqrt(secondsToEnd));
+    if (z < config.strategy.zEntryThreshold) return;
 
-    // ── Momentum Filter ───────────────────────────────────────────────
-    if (config.strategy.momentumEnabled && momentumSignal !== null) {
-      if (this.checkMomentumFilter(market.outcomeLabel, momentumSignal)) return;
-    }
+    // The book must also price this side as the favorite.
+    if (midpoint < 0.5) return;
 
-    // ── Oscillation Filter ────────────────────────────────────────────
-    if (config.strategy.oscillationFilterEnabled) {
-      if (this.checkOscillationFilter(market, config)) return;
-    }
+    const fairValue = barrierFairValue(z);
+    if (fairValue - midpoint < config.strategy.minEntryEdge) return;
 
     if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
       return;
@@ -197,11 +193,13 @@ export class StrategyEngine extends EventEmitter {
       bestAsk,
       bestBid,
       btcPrice: btcPriceData.price,
-      btcTargetPrice: market.targetPrice,
-      btcDistanceUsd,
+      strike: market.strike,
+      signedDistanceUsd,
+      sigmaPerSec,
+      z,
+      fairValue,
       secondsToEnd,
-      trigger: "end_of_window_micro_profit",
-      momentum: momentumSignal,
+      trigger: "barrier_zscore",
     };
 
     this.evaluatedTokens.add(tokenId);
@@ -212,136 +210,16 @@ export class StrategyEngine extends EventEmitter {
         marketId: market.marketId,
         outcome: market.outcomeLabel,
         midpoint: midpoint.toFixed(4),
-        bestAsk: bestAsk.toFixed(4),
-        btcPrice: btcPriceData.price.toFixed(2),
-        btcDistance: btcDistanceUsd.toFixed(2),
+        z: z.toFixed(2),
+        sigmaPerSec: sigmaPerSec.toFixed(3),
+        distance: signedDistanceUsd.toFixed(1),
+        fairValue: fairValue.toFixed(4),
         secondsToEnd: secondsToEnd.toFixed(1),
-        momentum: momentumSignal
-          ? `${momentumSignal.direction} ${momentumSignal.changeUsd >= 0 ? "+" : ""}$${momentumSignal.changeUsd.toFixed(2)}`
-          : "none",
       },
-      "Opportunity detected",
+      "Opportunity detected (barrier)",
     );
 
     this.emit("opportunityDetected", opportunity);
-  }
-
-  // ── Crossover tracking ──────────────────────────────────────────────
-
-  /**
-   * Track whether BTC has crossed the target price.
-   * Called on every price tick to maintain an accurate crossover history.
-   */
-  private trackCrossover(market: WatchedMarket, btcPrice: number): void {
-    const currentSide: "UP" | "DOWN" =
-      btcPrice >= market.targetPrice! ? "UP" : "DOWN";
-
-    if (market.lastBtcSide !== null && currentSide !== market.lastBtcSide) {
-      market.crossovers.push({ side: currentSide, ts: Date.now() });
-    }
-
-    market.lastBtcSide = currentSide;
-  }
-
-  /**
-   * Oscillation filter — skip if BTC has crossed the target price too many
-   * times in the recent window, indicating choppy/oscillating price action
-   * that makes directional trades unreliable.
-   *
-   * Returns true if the trade should be SKIPPED.
-   */
-  private checkOscillationFilter(
-    market: WatchedMarket,
-    config: ReturnType<typeof getConfig>,
-  ): boolean {
-    const now = Date.now();
-    const windowStart = now - config.strategy.oscillationWindowMs;
-    let recentCount = 0;
-
-    // Count crossovers in the lookback window (iterate from end for efficiency)
-    for (let i = market.crossovers.length - 1; i >= 0; i--) {
-      if (market.crossovers[i]!.ts < windowStart) break;
-      recentCount++;
-    }
-
-    if (recentCount >= config.strategy.oscillationMaxCrossovers) {
-      logger.info(
-        {
-          marketId: market.marketId,
-          outcome: market.outcomeLabel,
-          crossovers: recentCount,
-          maxAllowed: config.strategy.oscillationMaxCrossovers,
-          windowMs: config.strategy.oscillationWindowMs,
-        },
-        "Skipping: BTC oscillating around target (choppy price action)",
-      );
-      return true;
-    }
-
-    return false;
-  }
-
-  // ── Momentum filter ─────────────────────────────────────────────────
-
-  /**
-   * Momentum alignment filter.
-   *
-   * Skips when:
-   * 1. No data yet (conservative)
-   * 2. Neutral momentum (BTC ranging, no edge)
-   * 3. Direction mismatch (outcome disagrees with BTC momentum)
-   *
-   * Returns true if the trade should be SKIPPED.
-   */
-  private checkMomentumFilter(
-    outcomeLabel: string,
-    momentum: MomentumSignal,
-  ): boolean {
-    if (!momentum.hasData) {
-      logger.debug(
-        { outcomeLabel },
-        "Skipping: insufficient BTC price history for momentum",
-      );
-      return true;
-    }
-
-    if (momentum.direction === "NEUTRAL") {
-      logger.info(
-        {
-          outcomeLabel,
-          changeUsd: momentum.changeUsd.toFixed(2),
-          lookbackMs: momentum.lookbackMs,
-        },
-        "Skipping: BTC momentum NEUTRAL (ranging market, no edge)",
-      );
-      return true;
-    }
-
-    if (outcomeLabel === "Up" && momentum.direction === "DOWN") {
-      logger.info(
-        {
-          outcomeLabel,
-          momentum: momentum.direction,
-          changeUsd: momentum.changeUsd.toFixed(2),
-        },
-        "Skipping UP: BTC momentum is DOWN — direction mismatch",
-      );
-      return true;
-    }
-
-    if (outcomeLabel === "Down" && momentum.direction === "UP") {
-      logger.info(
-        {
-          outcomeLabel,
-          momentum: momentum.direction,
-          changeUsd: momentum.changeUsd.toFixed(2),
-        },
-        "Skipping DOWN: BTC momentum is UP — direction mismatch",
-      );
-      return true;
-    }
-
-    return false;
   }
 
   getPriceState(tokenId: string): TokenPriceState | undefined {
@@ -349,7 +227,6 @@ export class StrategyEngine extends EventEmitter {
   }
 }
 
-// Singleton
 let instance: StrategyEngine | null = null;
 export function getStrategyEngine(): StrategyEngine {
   if (!instance) instance = new StrategyEngine();
