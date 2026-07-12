@@ -1,15 +1,6 @@
-/**
- * Long-Running BTC Feed Staleness Monitor
- *
- * Runs indefinitely and watches for the exact condition that causes the
- * "BTC price stuck" bug: RTDS WebSocket stays open but stops delivering ticks.
- *
- * Prints alerts when silence exceeds 15s / 30s / 60s thresholds.
- * Also polls the production API every 30s to compare.
- *
- * Usage: npx tsx scripts/monitor-btc-staleness.ts
- *        Press Ctrl+C to stop.
- */
+// Watches the RTDS feed for the "open but silent" staleness condition and
+// force-reconnects, polling the production API to compare.
+// Usage: npx tsx scripts/monitor-btc-staleness.ts (Ctrl+C to stop)
 
 import WebSocket from "ws";
 
@@ -94,7 +85,6 @@ function connectRtds() {
   ws.on("error", (e) => console.error(`[${new Date().toISOString()}] ❌ WS error:`, e.message));
 }
 
-// ── Staleness watchdog (mirrors the production fix) ──────────────────────────
 setInterval(() => {
   const now = Date.now();
   const binanceAge = lastBinanceTick > 0 ? now - lastBinanceTick : -1;
@@ -120,7 +110,6 @@ setInterval(() => {
   }
 }, 10_000);
 
-// ── Periodic status log ───────────────────────────────────────────────────────
 setInterval(async () => {
   const now = Date.now();
   const binanceAge = lastBinanceTick > 0 ? fmt(now - lastBinanceTick) : "no ticks";
@@ -133,7 +122,6 @@ setInterval(async () => {
     `WS: ${wsRef?.readyState === WebSocket.OPEN ? "OPEN" : "NOT OPEN"}`
   );
 
-  // Compare with production API
   try {
     const res = await fetch(`${API_BASE}/api/stats`);
     const data = await res.json() as any;
@@ -142,12 +130,11 @@ setInterval(async () => {
     const prodPrice = data.btcPrice?.price;
     const prodFresh = data.orchestrator?.btcPriceFresh;
     console.log(
-      `             📡 Prod: $${prodPrice} age=${prodAge} fresh=${prodFresh} momentum=${data.orchestrator?.momentum?.direction}(Δ${data.orchestrator?.momentum?.changeUsd})`
+      `             📡 Prod: $${prodPrice} age=${prodAge} fresh=${prodFresh}`
     );
   } catch { /* ignore */ }
 }, 30_000);
 
-// ── Start ─────────────────────────────────────────────────────────────────────
 console.log("═".repeat(60));
 console.log("  PenguinX BTC Staleness Monitor");
 console.log("  Press Ctrl+C to stop");

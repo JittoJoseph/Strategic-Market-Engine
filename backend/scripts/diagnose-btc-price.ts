@@ -1,20 +1,11 @@
-/**
- * BTC Price Feed Diagnostic Script
- *
- * Diagnoses the "BTC price stuck/frozen" issue by:
- * 1. Connecting to the RTDS WebSocket (same as production) and monitoring both feeds
- * 2. Detecting if either Chainlink or Binance feed stops ticking
- * 3. Checking the live API for staleness
- * 4. Measuring the backfill timestamps to detect time-drift issues
- *
- * Usage: npx tsx scripts/diagnose-btc-price.ts
- */
+// Monitors the RTDS feeds and the live API to diagnose a frozen BTC price.
+// Usage: npx tsx scripts/diagnose-btc-price.ts
 
 import WebSocket from "ws";
 
 const RTDS_WS = "wss://ws-live-data.polymarket.com";
 const API_BASE = "https://penguinx-btc-analysis.onrender.com";
-const TEST_DURATION_MS = 60_000; // 60 seconds for a thorough test
+const TEST_DURATION_MS = 60_000;
 
 interface PriceEntry {
   source: "binance" | "chainlink" | "chainlink_backfill";
@@ -43,8 +34,6 @@ let firstChainlinkTick = 0;
 let backfillReceived = false;
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
-// ── Fetch current API state ──────────────────────────────────────────────────
-
 async function fetchApiState() {
   try {
     const res = await fetch(`${API_BASE}/api/stats`);
@@ -59,15 +48,12 @@ async function fetchApiState() {
     console.log(`  BTC timestamp:     ${new Date(btcTs).toISOString()}`);
     console.log(`  Wall clock now:    ${new Date().toISOString()}`);
     console.log(`  btcConnected:      ${data.orchestrator?.btcConnected}`);
-    console.log(`  Momentum:          ${data.orchestrator?.momentum?.direction} (Δ=${data.orchestrator?.momentum?.changeUsd})`);
     return data;
   } catch (e: any) {
     console.error("  ❌ Failed to fetch API state:", e.message);
     return null;
   }
 }
-
-// ── Feed health tracking ─────────────────────────────────────────────────────
 
 function updateFeedHealth(source: "binance" | "chainlink") {
   const h = feedHealth[source]!;
@@ -99,8 +85,6 @@ function startHealthMonitor() {
     }
   }, 5_000);
 }
-
-// ── WebSocket test ────────────────────────────────────────────────────────────
 
 function testRtdsWebSocket(): Promise<void> {
   return new Promise((resolve) => {
@@ -160,7 +144,6 @@ function testRtdsWebSocket(): Promise<void> {
       const payload = msg["payload"] as Record<string, unknown> | undefined;
       const now = Date.now();
 
-      // ── Chainlink backfill ─────────────────────────────────────────────────
       if (topic === "crypto_prices" && msgType === "subscribe") {
         const symbol = payload?.["symbol"] as string | undefined;
         const data = payload?.["data"];
@@ -173,7 +156,7 @@ function testRtdsWebSocket(): Promise<void> {
             const last = data[data.length - 1] as any;
             const firstTsRaw = first?.timestamp ?? 0;
             const lastTsRaw = last?.timestamp ?? 0;
-            // Detect if timestamps are seconds or milliseconds
+            // < 1e12 means the timestamp is in seconds, not milliseconds
             const firstTsMs = firstTsRaw < 1e12 ? firstTsRaw * 1000 : firstTsRaw;
             const lastTsMs = lastTsRaw < 1e12 ? lastTsRaw * 1000 : lastTsRaw;
 
@@ -183,12 +166,7 @@ function testRtdsWebSocket(): Promise<void> {
 
             const ninetySecondsAgo = now - 90_000;
             const coversLookback = firstTsMs <= ninetySecondsAgo;
-            console.log(`  Covers 90s momentum lookback: ${coversLookback ? "✅" : "⚠️  NO"}`);
-
-            console.log(`\n  🔬 Key insight: production setPrice() stores wallClock=Date.now() for backfill,`);
-            console.log(`     not the historical rawTs. All ${data.length} entries get timestamp≈now.`);
-            console.log(`     getMomentum() lookback will use priceHistory[0] as fallback (ok temporarily).`);
-            console.log(`     But if RTDS then stops sending real-time ticks → currentPrice FREEZES.`);
+            console.log(`  Covers 90s lookback: ${coversLookback ? "✅" : "⚠️  NO"}`);
 
             for (const item of data as any[]) {
               if (typeof item?.timestamp === "number" && typeof item?.value === "number") {
@@ -207,7 +185,6 @@ function testRtdsWebSocket(): Promise<void> {
         return;
       }
 
-      // ── Binance real-time ──────────────────────────────────────────────────
       if (topic === "crypto_prices" && msgType !== "subscribe") {
         const symbol = payload?.["symbol"] as string | undefined;
         const value = payload?.["value"];
@@ -239,7 +216,6 @@ function testRtdsWebSocket(): Promise<void> {
         return;
       }
 
-      // ── Chainlink real-time ────────────────────────────────────────────────
       if (topic === "crypto_prices_chainlink") {
         const symbol = payload?.["symbol"] as string | undefined;
         const value = payload?.["value"];
@@ -269,7 +245,6 @@ function testRtdsWebSocket(): Promise<void> {
         return;
       }
 
-      // Unknown (sampled)
       if (Math.random() < 0.02) {
         console.log(`\n❓ Unknown (sampled): ${JSON.stringify(msg).substring(0, 200)}`);
       }
@@ -288,8 +263,6 @@ function testRtdsWebSocket(): Promise<void> {
     }, TEST_DURATION_MS);
   });
 }
-
-// ── Summary ───────────────────────────────────────────────────────────────────
 
 function printSummary() {
   const now = Date.now();
@@ -344,8 +317,7 @@ function printSummary() {
     console.log("  → setPrice() is never called after backfill");
     console.log("  → currentPrice freezes at last backfill value");
     console.log("  → btcConnected stays true (WebSocket.OPEN is not enough)");
-    console.log("  → momentum changeUsd=0 because price never changes");
-    console.log("  → strategy skips all trades due to NEUTRAL momentum");
+    console.log("  → strategy stops trading because price never changes");
   } else if (binanceOk && !chainlinkOk) {
     console.log("  ℹ️  Binance is working, Chainlink is silent (normal if rate limited)");
     console.log("  → Binance alone should keep price updating");
@@ -366,21 +338,16 @@ function printSummary() {
   console.log(`${"═".repeat(60)}\n`);
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-
 async function main() {
   console.log(`${"═".repeat(60)}`);
   console.log("  PenguinX BTC Price Feed Diagnostic");
   console.log(`${"═".repeat(60)}\n`);
 
-  // 1. Fetch current API state
   await fetchApiState();
 
-  // 2. Run WebSocket test
   console.log(`\nStarting ${TEST_DURATION_MS / 1000}s RTDS WebSocket test...\n`);
   await testRtdsWebSocket();
 
-  // 3. Print summary
   printSummary();
 
   process.exit(0);

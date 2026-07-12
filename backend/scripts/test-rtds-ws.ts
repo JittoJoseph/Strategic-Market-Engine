@@ -1,15 +1,10 @@
-/**
- * RTDS WebSocket Test Script
- * Tests Polymarket's real-time data service WebSocket to verify
- * Chainlink and Binance BTC price feed message structures.
- *
- * Usage: npx tsx scripts/test-rtds-ws.ts
- */
+// Inspects the RTDS WebSocket Chainlink/Binance BTC feed message structures.
+// Usage: npx tsx scripts/test-rtds-ws.ts
 
 import WebSocket from "ws";
 
 const RTDS_WS = "wss://ws-live-data.polymarket.com";
-const TEST_DURATION_MS = 20_000; // 20 seconds
+const TEST_DURATION_MS = 20_000;
 
 interface PriceEntry {
   source: string;
@@ -32,7 +27,6 @@ function main() {
   ws.on("open", () => {
     console.log("✅ Connected!\n");
 
-    // Subscribe to both Chainlink (BTC/USD filtered) and Binance (all symbols)
     const subscribeMsg = JSON.stringify({
       action: "subscribe",
       subscriptions: [
@@ -48,7 +42,6 @@ function main() {
     ws.send(subscribeMsg);
     console.log("📤 Sent subscription:", subscribeMsg, "\n");
 
-    // Keepalive ping every 5s
     const pingTimer = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send("PING");
@@ -56,7 +49,6 @@ function main() {
       }
     }, 5_000);
 
-    // Auto-disconnect after test duration
     setTimeout(() => {
       clearInterval(pingTimer);
       ws.close();
@@ -83,7 +75,6 @@ function main() {
     const msgType = msg["type"] as string | undefined;
     const payload = msg["payload"] as Record<string, unknown> | undefined;
 
-    // ── Binance: topic="crypto_prices", real-time ticks ──────────────────────
     if (topic === "crypto_prices" && msgType !== "subscribe") {
       const symbol = payload?.["symbol"] as string | undefined;
       const value = payload?.["value"];
@@ -103,13 +94,11 @@ function main() {
           `\n🟡 [Binance]  BTC=$${value.toFixed(2)}  rawTs=${ts}  wallClock=${Date.now()}`
         );
       } else if (symbol) {
-        // Other symbols — just note them
         process.stdout.write(`(${symbol})`);
       }
       return;
     }
 
-    // ── Chainlink backfill: topic="crypto_prices", type="subscribe" ──────────
     if (topic === "crypto_prices" && msgType === "subscribe") {
       const symbol = payload?.["symbol"] as string | undefined;
       const data = payload?.["data"];
@@ -122,7 +111,6 @@ function main() {
           console.log("   First item:", JSON.stringify(data[0]));
           console.log("   Last item:", JSON.stringify(data[data.length - 1]));
 
-          // Populate history from backfill
           for (const item of data as any[]) {
             if (
               typeof item?.timestamp === "number" &&
@@ -143,7 +131,6 @@ function main() {
       return;
     }
 
-    // ── Chainlink real-time: topic="crypto_prices_chainlink" ─────────────────
     if (topic === "crypto_prices_chainlink") {
       const symbol = payload?.["symbol"] as string | undefined;
       const value = payload?.["value"];
@@ -166,7 +153,6 @@ function main() {
       return;
     }
 
-    // ── Unknown message ───────────────────────────────────────────────────────
     console.log("\n❓ Unknown message:", JSON.stringify(msg).substring(0, 300));
   });
 
@@ -228,42 +214,6 @@ function printSummary() {
         `  price=$${e.price.toFixed(2)}  rawTs=${e.rawTimestamp}  age=${Date.now() - e.rawTimestamp}ms`
       );
     });
-  }
-
-  // Momentum calculation test
-  if (collected.length >= 2) {
-    const now = Date.now();
-    const lookbackMs = 90_000;
-    const cutoffWall = now - lookbackMs;
-    const historical = collected.filter(
-      (e) => e.wallClock <= cutoffWall && e.source !== "chainlink_backfill"
-    );
-    const current = collected[collected.length - 1];
-
-    console.log(`\n🔬 Momentum test (lookback=${lookbackMs / 1000}s):`);
-    if (historical.length > 0 && current) {
-      const histPrice = historical[historical.length - 1]!.price;
-      const nowPrice = current.price;
-      const delta = nowPrice - histPrice;
-      const direction = Math.abs(delta) < 30 ? "NEUTRAL" : delta > 0 ? "UP" : "DOWN";
-      console.log(`  Historical price: $${histPrice.toFixed(2)}`);
-      console.log(`  Current price:    $${nowPrice.toFixed(2)}`);
-      console.log(`  Delta:            ${delta >= 0 ? "+" : ""}$${delta.toFixed(2)}`);
-      console.log(`  Momentum:         ${direction}`);
-    } else {
-      console.log("  ⚠️  Need 90s of real-time data to test momentum (backfill provides it)");
-      // Use backfill for momentum test
-      if (backfill.length >= 2) {
-        const oldest = backfill[0]!;
-        const newest = backfill[backfill.length - 1]!;
-        const delta = newest.price - oldest.price;
-        const direction = Math.abs(delta) < 30 ? "NEUTRAL" : delta > 0 ? "UP" : "DOWN";
-        console.log(`  Backfill oldest: $${oldest.price.toFixed(2)} at rawTs=${oldest.rawTimestamp}`);
-        console.log(`  Backfill newest: $${newest.price.toFixed(2)} at rawTs=${newest.rawTimestamp}`);
-        console.log(`  Delta:           ${delta >= 0 ? "+" : ""}$${delta.toFixed(2)}`);
-        console.log(`  Direction:       ${direction}`);
-      }
-    }
   }
 
   console.log("\n══════════════════════════════════════════════\n");
