@@ -1,1 +1,0 @@
-ALTER TABLE "simulated_trades" ALTER COLUMN "order_type" SET DEFAULT 'FAK';

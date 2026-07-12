@@ -1,1 +1,0 @@
-ALTER TABLE "simulated_trades" ADD COLUMN "min_price_during_position" numeric(18, 8);
