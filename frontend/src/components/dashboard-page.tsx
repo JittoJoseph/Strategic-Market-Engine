@@ -9,9 +9,8 @@ import { MarketsPanel } from "./markets-panel";
 import { ActivityPanel } from "./activity-panel";
 import { MarketDetailModal } from "./market-detail-modal";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { ExternalLink, X } from "lucide-react";
-import { pnlColor, formatPnl } from "@/lib/utils";
+import { ExternalLink } from "lucide-react";
+import { pnlColor } from "@/lib/utils";
 import {
   useTrades,
   useSystemStats,
@@ -30,7 +29,6 @@ import type {
   SystemStats,
   LiveMarketInfo,
   LiveMarketPrice,
-  ActivityEntry,
 } from "@/lib/types";
 import {
   MARKET_WINDOW_LABELS,
@@ -51,15 +49,8 @@ export function DashboardPage() {
     price: number;
     timestamp: number;
   } | null>(null);
-  // Real-time momentum driven by btcPriceUpdate WS (falls back to stats on initial load)
-  const [momentum, setMomentum] = useState<{
-    direction: "UP" | "DOWN" | "NEUTRAL";
-    changeUsd: number;
-    lookbackMs: number;
-    hasData: boolean;
-  } | null>(null);
+  const [sigmaPerSec, setSigmaPerSec] = useState<number | null>(null);
 
-  // Data hooks — trades are WS-driven; no polling
   const {
     trades,
     loading: tradesLoading,
@@ -78,11 +69,9 @@ export function DashboardPage() {
   } = useActiveMarkets();
   const { activities, loading: activitiesLoading } = useActivityLog();
 
-  // Real-time market state from WS
   const liveMarkets = useLiveMarkets();
   useWsConnection();
 
-  // BTC price + momentum from systemState WS broadcast
   useWsEvent(
     "btcPriceUpdate",
     useCallback((msg: any) => {
@@ -90,31 +79,25 @@ export function DashboardPage() {
       if (d?.price && typeof d.price === "number") {
         setBtcPrice({ price: d.price, timestamp: d.timestamp ?? Date.now() });
       }
-      if (d?.momentum) {
-        setMomentum(d.momentum);
+      if (typeof d?.sigmaPerSec === "number") {
+        setSigmaPerSec(d.sigmaPerSec);
       }
     }, []),
   );
 
-  // systemState: update markets, btcPrice fallback (btcPriceUpdate is faster but systemState seeds initial momentum)
   useWsEvent(
     "systemState",
-    useCallback(
-      (msg: any) => {
-        const d = msg?.data;
-        if (d?.btcPrice && typeof d.btcPrice === "object") {
-          setBtcPrice(d.btcPrice);
-        }
-        // Only seed momentum from systemState if we don't have a live value yet
-        if (d?.momentum && !momentum) {
-          setMomentum(d.momentum);
-        }
-      },
-      [momentum],
-    ),
+    useCallback((msg: any) => {
+      const d = msg?.data;
+      if (d?.btcPrice && typeof d.btcPrice === "object") {
+        setBtcPrice(d.btcPrice);
+      }
+      if (typeof d?.sigmaPerSec === "number") {
+        setSigmaPerSec(d.sigmaPerSec);
+      }
+    }, []),
   );
 
-  // Primary live market: soonest-expiring ACTIVE window, or next UPCOMING if none open
   const primaryMarket = useMemo(() => {
     const byEnd = (a: { endDate: string }, b: { endDate: string }) =>
       new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
@@ -126,13 +109,11 @@ export function DashboardPage() {
     return upcoming[0] ?? liveMarkets[0] ?? null;
   }, [liveMarkets]);
 
-  // Markets pending resolution (ENDED but still has open position)
   const positionMarkets = useMemo(
     () => liveMarkets.filter((m) => m.status === "ENDED" && m.hasPosition),
     [liveMarkets],
   );
 
-  // Flat tokenId → price map for TradesTable real-time P&L
   const livePricesMap = useMemo<Record<string, LiveMarketPrice>>(() => {
     const map: Record<string, LiveMarketPrice> = {};
     for (const m of liveMarkets) {
@@ -143,7 +124,7 @@ export function DashboardPage() {
     return map;
   }, [liveMarkets]);
 
-  // Fallback: if btcPriceAtWindowStart is null, use the entry price from the most recent open trade for this market
+  // Fallback when btcPriceAtWindowStart is null: entry price of an open trade in this market
   const btcPriceAtWindowStartFallback = useMemo(() => {
     const marketId = primaryMarket?.marketId;
     if (!marketId) return null;
@@ -154,7 +135,6 @@ export function DashboardPage() {
     return trade?.btcPriceAtEntry ? parseFloat(trade.btcPriceAtEntry) : null;
   }, [primaryMarket, trades]);
 
-  // marketId → endDate for trades table WINDOW column
   const marketEndDates = useMemo<Record<string, string>>(() => {
     const map: Record<string, string> = {};
     for (const m of liveMarkets) map[m.marketId] = m.endDate;
@@ -162,7 +142,6 @@ export function DashboardPage() {
     return map;
   }, [liveMarkets, markets]);
 
-  // Polymarket slug + question for the selected trade (for deep-link and modal header)
   const { slug: selectedTradeSlug, question: selectedTradeQuestion } =
     useMemo(() => {
       if (!selectedTrade) return { slug: null, question: null };
@@ -176,13 +155,11 @@ export function DashboardPage() {
       };
     }, [selectedTrade, liveMarkets, markets]);
 
-  // Determine window label from config
   const windowLabel = stats?.config?.marketWindow
     ? (MARKET_WINDOW_LABELS[stats.config.marketWindow as MarketWindow] ??
       stats.config.marketWindow)
     : "BTC WINDOW";
 
-  // Current BTC price (prefer WS-updated, fallback to stats)
   const currentBtcPrice = btcPrice ?? stats?.btcPrice ?? null;
 
   return (
@@ -190,7 +167,6 @@ export function DashboardPage() {
       <Header />
 
       <main className="flex-1 px-4 py-4 pb-16 max-w-7xl mx-auto w-full space-y-4">
-        {/* ── Command Center Panel ────────────── */}
         <TopDashboardSection
           stats={stats}
           btcPrice={currentBtcPrice}
@@ -208,9 +184,7 @@ export function DashboardPage() {
           liveMarkets={liveMarkets}
         />
 
-        {/* ── Two-column: Trades + Sidebar ─────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
-          {/* Left: Trades panel */}
           <div className="border border-border/30 rounded-lg bg-card/30 overflow-hidden">
             <Tabs
               value={activeTab}
@@ -280,9 +254,7 @@ export function DashboardPage() {
             </Tabs>
           </div>
 
-          {/* Right: Sidebar */}
           <div className="space-y-4">
-            {/* System stats */}
             <SidebarCard title="SYSTEM">
               {statsLoading ? (
                 <div className="text-xs text-muted-foreground animate-pulse font-mono py-4 text-center">
@@ -335,30 +307,13 @@ export function DashboardPage() {
                     value={stats.orchestrator.btcConnected ? "LIVE" : "OFFLINE"}
                     accent={stats.orchestrator.btcConnected}
                   />
-                  {/* Use live WS-driven momentum (updates every BTC tick ~1s) */}
-                  {(momentum ?? stats.orchestrator.momentum) && (
-                    <StatRow
-                      label="Momentum"
-                      value={`${
-                        (momentum ?? stats.orchestrator.momentum)!.direction
-                      } ${
-                        (momentum ?? stats.orchestrator.momentum)!.changeUsd >=
-                        0
-                          ? "+"
-                          : ""
-                      }$${Math.abs(
-                        (momentum ?? stats.orchestrator.momentum)!.changeUsd,
-                      ).toFixed(0)}`}
-                      accent={
-                        (momentum ?? stats.orchestrator.momentum)!.direction ===
-                        "UP"
-                      }
-                      warn={
-                        (momentum ?? stats.orchestrator.momentum)!.direction ===
-                        "DOWN"
-                      }
-                    />
-                  )}
+                  <StatRow
+                    label="BTC Vol"
+                    value={(() => {
+                      const s = sigmaPerSec ?? stats.orchestrator.sigmaPerSec;
+                      return s != null ? `~$${s.toFixed(2)}/s` : "—";
+                    })()}
+                  />
                 </div>
               ) : null}
             </SidebarCard>
@@ -367,62 +322,40 @@ export function DashboardPage() {
               {stats?.config ? (
                 <div className="space-y-2 text-xs font-mono">
                   <StatRow
-                    label="Entry Range"
-                    value={`${(stats.config.entryPriceThreshold * 100).toFixed(0)}–${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
+                    label="Z Entry Threshold"
+                    value={stats.config.zEntryThreshold.toFixed(2)}
                   />
                   <StatRow
-                    label="Trade Window"
-                    value={`${stats.config.tradeFromWindowSeconds}s`}
+                    label="Max Entry Price"
+                    value={`${(stats.config.maxEntryPrice * 100).toFixed(0)}¢`}
                   />
                   <StatRow
-                    label="Starting Capital"
-                    value={`$${stats.config.startingCapital}`}
+                    label="Entry From Window"
+                    value={`${stats.config.entryFromWindowSeconds}s`}
+                  />
+                  <StatRow
+                    label="Sigma Window"
+                    value={`${Math.round(stats.config.sigmaWindowMs / 1000)}s`}
+                  />
+                  <StatRow
+                    label="Min Entry Edge"
+                    value={stats.config.minEntryEdge.toString()}
+                  />
+                  <StatRow
+                    label="Recross Exit"
+                    value={
+                      stats.config.recrossExitEnabled ? "ENABLED" : "DISABLED"
+                    }
+                    accent={stats.config.recrossExitEnabled}
+                    warn={!stats.config.recrossExitEnabled}
                   />
                   <StatRow
                     label="Max Positions"
                     value={stats.config.maxPositions?.toString() ?? "—"}
                   />
                   <StatRow
-                    label="BTC Min Dist"
-                    value={`$${stats.config.minBtcDistanceUsd}`}
-                  />
-                  <StatRow
-                    label="Momentum Filter"
-                    value={
-                      stats.config.momentumEnabled
-                        ? `$${stats?.config?.momentumMinChangeUsd}`
-                        : "DISABLED"
-                    }
-                  />
-                  <StatRow
-                    label="Oscillation Filter"
-                    value={
-                      stats?.config?.oscillationFilterEnabled
-                        ? `${stats?.config?.oscillationMaxCrossovers} times`
-                        : "DISABLED"
-                    }
-                  />
-                  <StatRow
-                    label="Stop Loss"
-                    value={
-                      stats.config.stopLossEnabled
-                        ? `${(stats.config.stopLossPriceTrigger * 100).toFixed(0)}¢ trigger`
-                        : "DISABLED"
-                    }
-                    accent={stats.config.stopLossEnabled}
-                    warn={!stats.config.stopLossEnabled}
-                  />
-                  <StatRow
-                    label="Take Profit"
-                    value={
-                      stats.config.takeProfitEnabled
-                        ? stats.config.takeProfitTriggerPrice != null
-                          ? `${(stats.config.takeProfitTriggerPrice * 100).toFixed(0)}¢ trigger`
-                          : "ENABLED"
-                        : "DISABLED"
-                    }
-                    accent={!!stats.config.takeProfitEnabled}
-                    warn={!stats.config.takeProfitEnabled}
+                    label="Starting Capital"
+                    value={`$${stats.config.startingCapital}`}
                   />
                   <StatRow
                     label="Risk Guard"
@@ -468,8 +401,6 @@ export function DashboardPage() {
       <MarketDetailModal
         market={selectedMarket}
         trades={trades}
-        oscillationWindowMs={stats?.config?.oscillationWindowMs ?? 60_000}
-        oscillationMaxCrossovers={stats?.config?.oscillationMaxCrossovers ?? 3}
         open={selectedMarket !== null}
         onClose={() => setSelectedMarket(null)}
       />
@@ -477,16 +408,9 @@ export function DashboardPage() {
   );
 }
 
-/* ─── Sub-components ───────────────────────────────────────── */
-
 function polymarketUrl(market: LiveMarketInfo): string {
   if (market.slug) return `https://polymarket.com/event/${market.slug}`;
   return `https://polymarket.com/market/${market.marketId}`;
-}
-
-function polymarketMarketUrl(market: DiscoveredMarket): string {
-  if (market.slug) return `https://polymarket.com/event/${market.slug}`;
-  return `https://polymarket.com/market/${market.id}`;
 }
 
 function TopDashboardSection({
@@ -515,7 +439,6 @@ function TopDashboardSection({
   const [period, setPeriod] = useState<"1D" | "1W" | "1M" | "ALL">("ALL");
   const { performance } = usePerformanceRealtime(period);
 
-  // Get live unrealized PnL from open trades and current market prices
   const liveUnrealizedPnL = useUnrealizedPnL(trades, liveMarkets);
 
   const isPaused = stats?.orchestrator.paused ?? false;
@@ -556,7 +479,6 @@ function TopDashboardSection({
   const initialCapital = parseFloat(performance?.initialCapital || "0");
   const openPositionsValue = parseFloat(performance?.openPositionsValue || "0");
   const portfolioValue = cashBalance + openPositionsValue;
-  // Use live-calculated unrealized PnL instead of API value
   const unrealizedPnl = liveUnrealizedPnL;
   const wins = performance?.wins || 0;
   const losses = performance?.losses || 0;
@@ -572,7 +494,6 @@ function TopDashboardSection({
   const mainDisplayValue = gainFromInitial;
   const windowType = stats?.config?.marketWindow || "5M";
 
-  // Effective BTC price at window start: use captured value or fall back to entry price from trade
   const effectiveBtcAtStart =
     primaryMarket?.btcPriceAtWindowStart ??
     btcPriceAtWindowStartFallback ??
@@ -582,8 +503,7 @@ function TopDashboardSection({
     if (!primaryMarket) return null;
     const question = primaryMarket.question;
 
-    // For absolute price markets ("above $X") extract the target from the question.
-    // For relative Up/Down markets, btcPriceAtWindowStart is the price to beat.
+    // Absolute "above/below $X" markets carry the target in the question; Up/Down markets use btcPriceAtWindowStart
     const absolutePriceMatch = question.match(
       /(?:above|below)\s*\$([0-9,]+(?:\.\d+)?)/i,
     );
@@ -603,7 +523,6 @@ function TopDashboardSection({
     const fmt = (d: Date) =>
       d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-    // Direction from question: look for "above" / "higher" vs "below" / "lower"
     const qLower = question.toLowerCase();
     const isAbove =
       qLower.includes("above") ||
@@ -629,7 +548,6 @@ function TopDashboardSection({
     };
   }, [primaryMarket, windowType, effectiveBtcAtStart]);
 
-  // BTC price distance from target
   const btcDistanceInfo = useMemo(() => {
     if (!marketDetails?.targetPriceNum || !btcPrice) return null;
     const dist = btcPrice.price - marketDetails.targetPriceNum;
@@ -655,11 +573,8 @@ function TopDashboardSection({
         </div>
       )}
 
-      {/* Main two-panel layout */}
       <div className="flex flex-col xl:flex-row divide-y xl:divide-y-0 xl:divide-x divide-border/30">
-        {/* ── LEFT: ACTIVE MARKET ── */}
         <div className="xl:w-[420px] xl:shrink-0 p-5 flex flex-col gap-4">
-          {/* Header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div
@@ -691,12 +606,10 @@ function TopDashboardSection({
 
           {primaryMarket ? (
             <>
-              {/* Question */}
               <p className="text-sm font-mono text-foreground/80 leading-relaxed">
                 {primaryMarket.question}
               </p>
 
-              {/* Meta tags row */}
               <div className="flex flex-wrap gap-1.5">
                 {marketDetails?.windowLabel && (
                   <span className="text-[10px] font-mono text-muted-foreground border border-border/30 rounded px-2 py-0.5">
@@ -717,7 +630,6 @@ function TopDashboardSection({
                 )}
               </div>
 
-              {/* Price to beat vs current BTC */}
               <div className="border border-border/30 rounded-lg overflow-hidden">
                 <div className="grid grid-cols-2 divide-x divide-border/30">
                   <div className="p-3">
@@ -767,7 +679,6 @@ function TopDashboardSection({
                 )}
               </div>
 
-              {/* Timer + odds */}
               <div className="grid grid-cols-3 gap-2">
                 <div className="col-span-1 border border-border/30 rounded-lg p-3 flex flex-col items-center justify-center text-center gap-0.5">
                   <div className="text-[10px] font-mono text-muted-foreground tracking-widest">
@@ -817,9 +728,7 @@ function TopDashboardSection({
           )}
         </div>
 
-        {/* ── RIGHT: PORTFOLIO PERFORMANCE ── */}
         <div className="flex-1 flex flex-col">
-          {/* Section header */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border/20">
             <div className="flex items-center gap-3">
               <span className="text-[10px] font-mono tracking-[0.18em] text-muted-foreground">
@@ -842,9 +751,7 @@ function TopDashboardSection({
             </div>
           </div>
 
-          {/* Flat column layout — separated by vertical dividers */}
           <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-border/20">
-            {/* Col 1: P&L */}
             <div className="p-5 space-y-4">
               <div>
                 <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-1">
@@ -891,7 +798,6 @@ function TopDashboardSection({
               </div>
             </div>
 
-            {/* Col 2: Portfolio + Win rate */}
             <div className="p-5 space-y-4">
               <div>
                 <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
@@ -947,7 +853,6 @@ function TopDashboardSection({
               </div>
             </div>
 
-            {/* Col 3: Best / Worst */}
             <div className="p-5 space-y-4">
               <div className="text-[10px] font-mono text-muted-foreground tracking-widest">
                 PERFORMANCE
@@ -987,7 +892,6 @@ function TopDashboardSection({
               </div>
             </div>
 
-            {/* Col 4: System + breakdown */}
             <div className="p-5 space-y-4">
               <div className="text-[10px] font-mono text-muted-foreground tracking-widest">
                 SYSTEM
@@ -1035,7 +939,6 @@ function TopDashboardSection({
         </div>
       </div>
 
-      {/* Awaiting resolution — compact card-style design */}
       {positionMarkets.length > 0 && (
         <div className="border-t border-border/20 bg-card/20">
           <div className="px-5 py-3">
@@ -1051,7 +954,6 @@ function TopDashboardSection({
               </div>
               <div className="flex flex-wrap gap-1.5 justify-end">
                 {positionMarkets.map((m) => {
-                  // Compact label: "Feb 23 · 3:30–3:35 AM"
                   const end = new Date(m.endDate);
                   const start = m.windowStart ? new Date(m.windowStart) : null;
                   const datePart = end.toLocaleDateString("en-US", {

@@ -3,18 +3,12 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
 import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
-import {
-  MARKET_WINDOW_LABELS,
-  getMarketWindowDurationMs,
-  type MarketWindow,
-} from "@/lib/types";
+import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 import NumberFlow from "@number-flow/react";
 
 interface MarketDetailModalProps {
   market: DiscoveredMarket | null;
   trades: SimulatedTrade[];
-  oscillationWindowMs?: number;
-  oscillationMaxCrossovers?: number;
   open: boolean;
   onClose: () => void;
 }
@@ -29,103 +23,6 @@ function Chip({ children }: { children: React.ReactNode }) {
     <span className="inline-flex items-center text-[10px] font-mono font-medium tracking-wider text-muted-foreground/50 border border-border/25 rounded px-1.5 py-0.5">
       {children}
     </span>
-  );
-}
-
-function CrossoverTimeline({
-  crossovers,
-  trades,
-  marketStart,
-  marketEnd,
-}: {
-  crossovers: Array<{ side: "UP" | "DOWN"; ts: number }>;
-  trades: SimulatedTrade[];
-  marketStart: number;
-  marketEnd: number;
-}) {
-  const duration = marketEnd - marketStart;
-  if (duration <= 0) return null;
-
-  // Sort crossovers by timestamp
-  const sortedCrossovers = [...crossovers].sort((a, b) => a.ts - b.ts);
-
-  const minuteMarkers = [];
-  const totalMinutes = Math.ceil(duration / (60 * 1000));
-  const maxMarkers = 6;
-  const stepMinutes = Math.max(1, Math.ceil(totalMinutes / (maxMarkers - 1)));
-
-  for (let minute = 0; minute <= totalMinutes; minute += stepMinutes) {
-    const timeMs = Math.min(marketStart + minute * 60 * 1000, marketEnd);
-    const position = ((timeMs - marketStart) / duration) * 100;
-    minuteMarkers.push({ minute, position });
-  }
-
-  if (minuteMarkers[minuteMarkers.length - 1]?.minute !== totalMinutes) {
-    minuteMarkers.push({ minute: totalMinutes, position: 100 });
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="relative">
-        {/* Timeline background */}
-        <div className="relative h-12 bg-muted/20 rounded border">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full h-px bg-border/30"></div>
-          </div>
-
-          {/* Crossover points */}
-          {sortedCrossovers.map((crossover, i) => {
-            const position = ((crossover.ts - marketStart) / duration) * 100;
-            return (
-              <div
-                key={i}
-                className="absolute top-1/2 transform -translate-y-1/2 -translate-x-1/2"
-                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
-                title={`${crossover.side} crossover @ ${new Date(crossover.ts).toLocaleTimeString()}`}
-              >
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    crossover.side === "UP"
-                      ? "bg-green-500/70"
-                      : "bg-red-500/70"
-                  } border border-white/50`}
-                />
-              </div>
-            );
-          })}
-
-          {/* Trade entry lines */}
-          {trades.map((trade, i) => {
-            const entryTime = new Date(trade.entryTs).getTime();
-            const position = ((entryTime - marketStart) / duration) * 100;
-            return (
-              <div
-                key={`trade-${i}`}
-                className="absolute top-0 bottom-0 w-px bg-blue-500/50"
-                style={{ left: `${Math.max(0, Math.min(100, position))}%` }}
-                title={`Trade entry @ ${new Date(trade.entryTs).toLocaleTimeString()}`}
-              />
-            );
-          })}
-        </div>
-
-        {/* Minute markers */}
-        <div className="relative mt-1 pb-4">
-          {minuteMarkers.map((marker, i) => (
-            <div
-              key={i}
-              className="absolute transform -translate-x-1/2"
-              style={{ left: `${marker.position}%` }}
-            >
-              <div className="w-px h-2 bg-border/50"></div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5 text-center font-mono">
-                {marker.minute}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -148,7 +45,6 @@ function Section({
   );
 }
 
-/** 2-column grid wrapper for Cell items */
 function Row2({ children }: { children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-2 divide-x divide-y divide-border/[0.08]">
@@ -207,8 +103,6 @@ function formatTimeAgo(endTime: number): string {
 export function MarketDetailModal({
   market,
   trades,
-  oscillationWindowMs = 60_000,
-  oscillationMaxCrossovers = 3,
   open,
   onClose,
 }: MarketDetailModalProps) {
@@ -219,30 +113,11 @@ export function MarketDetailModal({
     MARKET_WINDOW_LABELS[market.windowType as MarketWindow] ??
     market.windowType;
   const polyUrl = polymarketMarketUrl(market);
-  const crossovers = market.metadata?.crossovers || [];
   const marketTrades = trades.filter((trade) => trade.marketId === market.id);
-  const windowDurationMs = getMarketWindowDurationMs(market.windowType);
-  const marketEndMs = market.endDate
-    ? new Date(market.endDate).getTime()
-    : Date.now();
-  const marketStartMs = marketEndMs - windowDurationMs;
-
-  // Calculate crossovers before entry for trades
-  const tradeCrossoverCounts = marketTrades.map((trade) => {
-    const entryTime = new Date(trade.entryTs).getTime();
-    const lookbackStart = entryTime - oscillationWindowMs;
-    const count = crossovers.filter(
-      (c) => c.ts >= lookbackStart && c.ts <= entryTime,
-    ).length;
-    return { trade, count };
-  });
-
-  const lookbackSeconds = Math.max(1, Math.round(oscillationWindowMs / 1000));
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="w-[calc(100%-2rem)] sm:w-full sm:max-w-[520px] font-mono bg-background border-border/30 max-h-[90dvh] gap-0 p-0 overflow-hidden rounded-xl">
-        {/* ── HEADER ── */}
         <div className="shrink-0 px-4 pt-4 pb-3 border-b border-border/20">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -282,9 +157,7 @@ export function MarketDetailModal({
           </DialogTitle>
         </div>
 
-        {/* ── SCROLLABLE BODY ── */}
         <div className="overscroll-contain">
-          {/* ── MARKET INFO ── */}
           <Section title="MARKET INFO">
             <Row2>
               <Cell label="ID" value={market.id.slice(0, 16) + "..."} />
@@ -297,7 +170,6 @@ export function MarketDetailModal({
             </Row2>
           </Section>
 
-          {/* ── TIMING ── */}
           <Section title="TIMING">
             <Row2>
               <Cell label="CREATED" value={formatTs(market.createdAt)} />
@@ -324,40 +196,6 @@ export function MarketDetailModal({
             </Row2>
           </Section>
 
-          {/* ── OSCILLATION ── */}
-          {crossovers.length > 0 && (
-            <Section title="OSCILLATION">
-              <div className="px-4 pb-4 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-mono text-muted-foreground">
-                    CROSSOVERS: {crossovers.length}
-                  </span>
-                  {tradeCrossoverCounts.length > 0 && (
-                    <span
-                      className={`text-xs font-mono ${
-                        tradeCrossoverCounts[0].count >=
-                        oscillationMaxCrossovers
-                          ? "text-red-500"
-                          : "text-green-600"
-                      }`}
-                    >
-                      LAST {lookbackSeconds}S: {tradeCrossoverCounts[0].count}/
-                      {oscillationMaxCrossovers}
-                    </span>
-                  )}
-                </div>
-
-                <CrossoverTimeline
-                  crossovers={crossovers}
-                  trades={marketTrades}
-                  marketStart={marketStartMs}
-                  marketEnd={marketEndMs}
-                />
-              </div>
-            </Section>
-          )}
-
-          {/* ── TRADES ── */}
           {marketTrades.length > 0 && (
             <Section title="TRADES">
               {marketTrades.map((trade) => (

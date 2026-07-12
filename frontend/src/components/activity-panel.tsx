@@ -1,7 +1,6 @@
 "use client";
 
 import type { ActivityEntry } from "@/lib/types";
-import { formatPnl } from "@/lib/utils";
 import NumberFlow from "@number-flow/react";
 
 const KIND_META: Record<
@@ -22,11 +21,6 @@ const KIND_META: Record<
     dot: "bg-red-400",
     badge: "bg-red-500/10 text-red-400 border-red-500/20",
     label: "LOSS",
-  },
-  MOMENTUM_SKIP: {
-    dot: "bg-amber-400",
-    badge: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    label: "SKIPPED",
   },
   MARKET_RESOLVED: {
     dot: "bg-purple-400",
@@ -97,22 +91,18 @@ export function ActivityPanel({ activities, loading }: ActivityPanelProps) {
             key={entry.id}
             className="flex items-start gap-3 px-4 py-3 hover:bg-muted/10 transition-colors"
           >
-            {/* Dot */}
             <div className="mt-1.5 shrink-0">
               <div className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
             </div>
 
-            {/* Content */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
-                {/* Kind badge */}
                 <span
                   className={`text-[9px] font-mono font-bold border rounded px-1.5 py-0.5 ${meta.badge}`}
                 >
                   {meta.label}
                 </span>
 
-                {/* PnL badge for trade results */}
                 {hasPnl && (
                   <span
                     className={`text-[9px] font-mono font-bold tabular-nums ${
@@ -125,13 +115,11 @@ export function ActivityPanel({ activities, loading }: ActivityPanelProps) {
                   </span>
                 )}
 
-                {/* Timestamp */}
                 <span className="ml-auto text-[9px] font-mono text-muted-foreground/40 tabular-nums shrink-0">
                   {timeAgo(entry.ts)}
                 </span>
               </div>
 
-              {/* Detail line */}
               <div className="text-xs font-mono text-muted-foreground leading-snug truncate">
                 {entry.detail}
               </div>

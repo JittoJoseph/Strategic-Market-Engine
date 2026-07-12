@@ -2,7 +2,7 @@
 
 import type { SimulatedTrade } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
-import { formatPnl, pnlColor } from "@/lib/utils";
+import { pnlColor } from "@/lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ExternalLink, X } from "lucide-react";
 
@@ -34,12 +34,13 @@ export function TradeDetailPopup({
   const btcTarget = trade.btcTargetPrice
     ? parseFloat(trade.btcTargetPrice)
     : null;
-  const btcDist = trade.btcDistanceUsd
-    ? parseFloat(trade.btcDistanceUsd)
-    : null;
-  const minPrice = trade.minPriceDuringPosition
-    ? parseFloat(trade.minPriceDuringPosition)
-    : null;
+  const btcDist =
+    trade.btcDistanceUsd != null ? parseFloat(trade.btcDistanceUsd) : null;
+  const entryZ = trade.entryZ != null ? parseFloat(trade.entryZ) : null;
+  const entrySigma =
+    trade.entrySigma != null ? parseFloat(trade.entrySigma) : null;
+  const secondsToEnd =
+    trade.secondsToEnd != null ? parseFloat(trade.secondsToEnd) : null;
   const shares = parseFloat(trade.entryShares);
   const budget = parseFloat(trade.positionBudget);
   const actualCost = parseFloat(trade.actualCost);
@@ -193,22 +194,6 @@ export function TradeDetailPopup({
                 })}
               />
               <Cell
-                label="MIN PRICE DURNING WINDOW"
-                value={
-                  minPrice !== null && minPrice > 0 ? (
-                    <>
-                      {(minPrice * 100).toLocaleString("en-US", {
-                        minimumFractionDigits: 3,
-                        maximumFractionDigits: 3,
-                      })}
-                      ¢
-                    </>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <Cell
                 label="BUDGET"
                 value={budget.toLocaleString("en-US", {
                   style: "currency",
@@ -256,108 +241,62 @@ export function TradeDetailPopup({
 
           {(btcAtEntry !== null ||
             (btcTarget !== null && btcTarget > 0) ||
-            (btcDist !== null && btcDist > 0) ||
-            trade.momentumDirection ||
-            trade.crossovers) && (
+            btcDist !== null ||
+            entryZ !== null ||
+            entrySigma !== null ||
+            secondsToEnd !== null) && (
             <Section title="BTC CONTEXT">
               <Row2>
                 {btcAtEntry !== null && (
                   <Cell label="AT ENTRY" value={fmtBtc(btcAtEntry)} />
                 )}
                 {btcTarget !== null && btcTarget > 0 && (
-                  <Cell label="TARGET" value={fmtBtc(btcTarget)} />
+                  <Cell label="STRIKE" value={fmtBtc(btcTarget)} />
                 )}
-                {btcDist !== null && btcDist > 0 && (
+                {btcDist !== null && (
                   <Cell
                     label="DISTANCE"
-                    value={btcDist.toLocaleString("en-US", {
-                      style: "currency",
-                      currency: "USD",
+                    value={
+                      <span
+                        className={
+                          btcDist >= 0 ? "text-emerald-400" : "text-red-400"
+                        }
+                      >
+                        {btcDist.toLocaleString("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                          signDisplay: "always",
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    }
+                  />
+                )}
+                {entryZ !== null && (
+                  <Cell
+                    label="ENTRY Z-SCORE"
+                    value={entryZ.toLocaleString("en-US", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}
                   />
                 )}
-                {trade.momentumDirection && (
+                {entrySigma !== null && (
                   <Cell
-                    label="MOMENTUM"
-                    value={
-                      <span
-                        className={
-                          trade.momentumDirection === "UP"
-                            ? "text-emerald-400"
-                            : trade.momentumDirection === "DOWN"
-                              ? "text-red-400"
-                              : "text-foreground/60"
-                        }
-                      >
-                        {trade.momentumDirection}
-                        {trade.momentumChangeUsd && (
-                          <span className="text-muted-foreground/40 ml-2 font-mono">
-                            {Math.abs(
-                              parseFloat(trade.momentumChangeUsd),
-                            ).toLocaleString("en-US", {
-                              style: "currency",
-                              currency: "USD",
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 0,
-                            })}
-                          </span>
-                        )}
-                      </span>
-                    }
+                    label="ENTRY SIGMA"
+                    value={`$${entrySigma.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}/s`}
                   />
                 )}
-                {trade.crossovers && (
+                {secondsToEnd !== null && (
                   <Cell
-                    label="WINDOW CROSSOVERS"
-                    value={
-                      <span
-                        className="cursor-help"
-                        title={
-                          trade.crossovers.details.length > 0
-                            ? trade.crossovers.details
-                                .map(
-                                  (c) =>
-                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                                )
-                                .join(" | ")
-                            : "None"
-                        }
-                      >
-                        {trade.crossovers.all}
-                      </span>
-                    }
-                  />
-                )}
-                {trade.crossovers && (
-                  <Cell
-                    label="CROSSOVERS BEFORE ENTRY"
-                    value={
-                      <span
-                        className="cursor-help"
-                        title={
-                          trade.crossovers.details.filter(
-                            (c) =>
-                              c.ts >= new Date(trade.entryTs).getTime() - 60000,
-                          ).length > 0
-                            ? trade.crossovers.details
-                                .filter(
-                                  (c) =>
-                                    c.ts >=
-                                    new Date(trade.entryTs).getTime() - 60000,
-                                )
-                                .map(
-                                  (c) =>
-                                    `${c.side} @ ${formatTs(new Date(c.ts).toISOString())}`,
-                                )
-                                .join(" | ")
-                            : "None"
-                        }
-                      >
-                        {trade.crossovers.last60s}
-                      </span>
-                    }
+                    label="SECONDS TO END"
+                    value={`${secondsToEnd.toLocaleString("en-US", {
+                      maximumFractionDigits: 0,
+                    })}s`}
                   />
                 )}
               </Row2>
@@ -383,7 +322,7 @@ export function TradeDetailPopup({
                 <>
                   <span className="text-muted-foreground/20">·</span>
                   <span className="text-[11px] font-mono tracking-wider text-muted-foreground/70">
-                    {exitReason}
+                    {exitReasonLabel(exitReason)}
                   </span>
                 </>
               )}
@@ -476,6 +415,19 @@ function Cell({ label, value }: { label: string; value: React.ReactNode }) {
       </span>
     </div>
   );
+}
+
+function exitReasonLabel(reason: string): string {
+  switch (reason) {
+    case "RESOLUTION":
+      return "Resolved at window close";
+    case "RECROSS":
+      return "BTC recrossed strike";
+    case "FORCE_TIMEOUT":
+      return "Force timeout";
+    default:
+      return reason;
+  }
 }
 
 function formatTs(iso: string): string {

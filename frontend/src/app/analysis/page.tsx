@@ -10,7 +10,6 @@ import { ApiClient } from "@/lib/api-client";
 const api = new ApiClient();
 const MIN_RELIABLE_TRADES = 30;
 
-//  Formatting helpers
 const fmtUsd = (n: number, dp = 2) =>
   "$" +
   Math.abs(n).toLocaleString("en-US", {
@@ -25,7 +24,6 @@ const SIM_OPTIONS = [1_000, 5_000, 10_000, 25_000] as const;
 type TradesOption = (typeof TRADES_OPTIONS)[number] | "all";
 type SimOption = (typeof SIM_OPTIONS)[number];
 
-//  Page
 export default function AnalysisPage() {
   const [result, setResult] = useState<MonteCarloResult | null>(null);
   const [noData, setNoData] = useState(false);
@@ -33,7 +31,7 @@ export default function AnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [tradesPerSim, setTradesPerSim] = useState<TradesOption>(100);
   const [simulations, setSimulations] = useState<SimOption>(10_000);
-  // Tracks the last known settled count so "all" can resolve without a dep on `result`
+  // Last known settled count, so "all" resolves without depending on `result`
   const totalSettledRef = useRef<number>(500);
 
   const fetchAnalysis = useCallback(async () => {
@@ -72,7 +70,6 @@ export default function AnalysisPage() {
     <div className="min-h-screen bg-background text-foreground">
       <Header />
       <main className="container mx-auto px-4 py-5 max-w-6xl space-y-3">
-        {/* Top bar */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <Link
@@ -87,7 +84,6 @@ export default function AnalysisPage() {
             </span>
           </div>
 
-          {/* Filters */}
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <div className="flex items-center gap-1.5">
               <span className="text-[9px] font-mono text-muted-foreground/40 tracking-widest">
@@ -155,7 +151,6 @@ export default function AnalysisPage() {
           </div>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="border border-red-500/30 bg-red-500/5 rounded-lg px-4 py-3 text-xs font-mono text-red-400 flex items-center gap-2">
             <AlertTriangle size={12} />
@@ -163,7 +158,6 @@ export default function AnalysisPage() {
           </div>
         )}
 
-        {/* Loading */}
         {loading && !result && !noData && (
           <div className="border border-border/30 rounded-xl py-24 flex flex-col items-center gap-3">
             <TrendingUp
@@ -176,10 +170,8 @@ export default function AnalysisPage() {
           </div>
         )}
 
-        {/* No data */}
         {noData && !loading && <EmptyState />}
 
-        {/* Low sample */}
         {lowSample && !loading && result && (
           <div className="border border-amber-500/30 bg-amber-500/5 rounded-lg px-4 py-2 flex items-center gap-2">
             <AlertTriangle size={10} className="text-amber-500 shrink-0" />
@@ -192,7 +184,6 @@ export default function AnalysisPage() {
           </div>
         )}
 
-        {/* Results */}
         {result && !loading && (
           <>
             <StatsPanel data={result} />
@@ -205,7 +196,6 @@ export default function AnalysisPage() {
   );
 }
 
-//  Empty state
 function EmptyState() {
   return (
     <div className="border border-border/30 rounded-xl flex flex-col items-center justify-center py-24 gap-3 text-center">
@@ -226,7 +216,6 @@ function EmptyState() {
   );
 }
 
-//  Stats panel  mirrors dashboard portfolio section layout
 function StatsPanel({ data }: { data: MonteCarloResult }) {
   const h = data.historical;
   const pfDisplay = h.profitFactor >= 999 ? "" : h.profitFactor.toFixed(2);
@@ -241,7 +230,6 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
 
   return (
     <div className="border border-border/30 rounded-xl bg-background overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border/20">
         <span className="text-[10px] font-mono tracking-[0.18em] text-muted-foreground">
           HISTORICAL STATISTICS
@@ -252,9 +240,7 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
         </span>
       </div>
 
-      {/* Columns */}
       <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-border/20">
-        {/* Win rate */}
         <div className="p-5 space-y-3">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest">
             WIN RATE
@@ -276,7 +262,6 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
           </div>
         </div>
 
-        {/* Profit factor */}
         <div className="p-5">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-1">
             PROFIT FACTOR
@@ -296,7 +281,6 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
           </div>
         </div>
 
-        {/* Expectancy */}
         <div className="p-5">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-1">
             EXPECTANCY
@@ -317,7 +301,6 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
           </div>
         </div>
 
-        {/* Avg win / avg loss */}
         <div className="p-5 space-y-4">
           <div>
             <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-0.5">
@@ -351,7 +334,6 @@ function StatsPanel({ data }: { data: MonteCarloResult }) {
   );
 }
 
-//  Chart panel
 function ChartPanel({ data }: { data: MonteCarloResult }) {
   const [tab, setTab] = useState<"histogram" | "equity">("histogram");
   return (
@@ -387,7 +369,6 @@ function ChartPanel({ data }: { data: MonteCarloResult }) {
   );
 }
 
-//  Histogram
 function HistogramChart({ data }: { data: MonteCarloResult }) {
   const { histogram, percentiles } = data.distribution;
   const [hovered, setHovered] = useState<number | null>(null);
@@ -397,7 +378,6 @@ function HistogramChart({ data }: { data: MonteCarloResult }) {
 
   return (
     <div className="px-5 pb-4 pt-4">
-      {/* Hover info strip */}
       <div className="h-5 mb-3">
         {hoveredBucket ? (
           <div className="flex items-center justify-between text-[10px] font-mono">
@@ -420,7 +400,6 @@ function HistogramChart({ data }: { data: MonteCarloResult }) {
         )}
       </div>
 
-      {/* Bars */}
       <div className="flex items-end h-44">
         {histogram.map((bucket, i) => {
           const mid = (bucket.min + bucket.max) / 2;
@@ -455,7 +434,6 @@ function HistogramChart({ data }: { data: MonteCarloResult }) {
         })}
       </div>
 
-      {/* X axis */}
       <div className="flex justify-between mt-2 text-[9px] font-mono text-muted-foreground/40">
         <span>{fmtUsd(histogram[0]?.min ?? 0, 0)}</span>
         <span className="text-blue-400/60">
@@ -464,7 +442,6 @@ function HistogramChart({ data }: { data: MonteCarloResult }) {
         <span>{fmtUsd(histogram[histogram.length - 1]?.max ?? 0, 0)}</span>
       </div>
 
-      {/* Legend */}
       <div className="flex items-center gap-4 mt-2.5 text-[9px] font-mono text-muted-foreground/50">
         <span className="flex items-center gap-1.5">
           <span className="w-2 h-1.5 rounded-sm bg-emerald-500/50 inline-block" />
@@ -484,7 +461,6 @@ function HistogramChart({ data }: { data: MonteCarloResult }) {
   );
 }
 
-//  Equity curves
 function EquityCurvesChart({ data }: { data: MonteCarloResult }) {
   const curves = data.equityCurves;
   const startCap = data.startingCapital;
@@ -517,7 +493,6 @@ function EquityCurvesChart({ data }: { data: MonteCarloResult }) {
     95: { color: "#10b981", w: 1.5, label: "P95" },
   };
 
-  // Confidence band P25P75
   const p25 = curves.find((c) => c.percentile === 25);
   const p75 = curves.find((c) => c.percentile === 75);
   const bandPoints =
@@ -539,7 +514,6 @@ function EquityCurvesChart({ data }: { data: MonteCarloResult }) {
         className="w-full h-52"
         preserveAspectRatio="none"
       >
-        {/* Break-even */}
         <line
           x1={0}
           y1={breakEvenY}
@@ -549,11 +523,10 @@ function EquityCurvesChart({ data }: { data: MonteCarloResult }) {
           strokeOpacity={0.06}
           strokeDasharray="4 5"
         />
-        {/* P25-P75 band */}
         {bandPoints && (
           <polygon points={bandPoints} fill="white" fillOpacity={0.04} />
         )}
-        {/* Curves  P50 last to render on top */}
+        {/* P50 rendered last so it sits on top */}
         {[...curves]
           .sort((a, b) =>
             b.percentile === 50 ? -1 : a.percentile === 50 ? 1 : 0,
@@ -616,14 +589,12 @@ function EquityCurvesChart({ data }: { data: MonteCarloResult }) {
   );
 }
 
-//  Bottom panel  3-col grid matching dashboard style
 function BottomPanel({ data }: { data: MonteCarloResult }) {
   const d = data.distribution;
   const dd = data.drawdown;
   const h = data.historical;
   const s = data.startingCapital;
 
-  // Verdict score
   const scores = [
     Math.min(20, (h.winRate / 60) * 20),
     Math.min(
@@ -647,7 +618,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
   return (
     <div className="border border-border/30 rounded-xl bg-background overflow-hidden">
       <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border/20">
-        {/* Final balance distribution */}
         <div className="p-5">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-4">
             FINAL BALANCE
@@ -699,13 +669,11 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
           </div>
         </div>
 
-        {/* Risk */}
         <div className="p-5">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-4">
             RISK METRICS
           </div>
           <div className="space-y-4">
-            {/* Profit probability */}
             <div>
               <div className="flex items-end justify-between mb-1.5">
                 <span className="text-[10px] font-mono text-muted-foreground tracking-widest">
@@ -725,7 +693,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
               </div>
             </div>
 
-            {/* Ruin risk */}
             <div>
               <div className="flex items-end justify-between mb-1.5">
                 <div>
@@ -750,7 +717,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
               </div>
             </div>
 
-            {/* Drawdown grid */}
             <div>
               <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-2">
                 MAX DRAWDOWN
@@ -780,7 +746,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
           </div>
         </div>
 
-        {/* Verdict */}
         <div className="p-5">
           <div className="text-[10px] font-mono text-muted-foreground tracking-widest mb-4">
             VERDICT
@@ -804,7 +769,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
             </div>
           </div>
 
-          {/* Overall bar */}
           <div className="h-1 w-full rounded-full bg-muted/20 overflow-hidden mb-4">
             <div
               className="h-full rounded-full transition-all duration-700"
@@ -812,7 +776,6 @@ function BottomPanel({ data }: { data: MonteCarloResult }) {
             />
           </div>
 
-          {/* Factor breakdown */}
           <div className="space-y-2">
             {[
               { label: "Win rate", v: scores[0]! },

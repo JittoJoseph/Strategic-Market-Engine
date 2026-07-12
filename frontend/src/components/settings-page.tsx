@@ -54,15 +54,12 @@ export function SettingsPage() {
         await api.wipeSystem(password);
         setSuccess("Database wiped successfully.");
       }
-      
-      // Refresh system stats after action
+
       await refetchStats();
-      
-      // Close dialog after short delay to show success message
+
       setTimeout(() => {
         closeDialog();
       }, 1500);
-      
     } catch (err: any) {
       setError(err.message || "Failed to execute action. Invalid password?");
     } finally {
@@ -89,7 +86,6 @@ export function SettingsPage() {
           <p className="text-xs text-muted-foreground">Manage administrative controls and system configuration.</p>
         </div>
 
-        {/* Global Notifications */}
         {success && !activeAction && (
           <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-sm rounded-md">
             {success}

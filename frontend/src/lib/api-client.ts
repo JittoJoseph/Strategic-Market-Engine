@@ -1,7 +1,3 @@
-/**
- * API client for the PenguinX BTC end-of-window micro-profit simulation backend.
- */
-
 import type {
   SimulatedTrade,
   SystemStats,
@@ -161,7 +157,7 @@ export class ApiClient {
     if (params?.tradesPerSim)
       searchParams.set("tradesPerSim", String(params.tradesPerSim));
     const qs = searchParams.toString();
-    // Do NOT retry on 400 — backend returns 400 when there are no settled trades
+    // No retry: backend returns 400 when there are no settled trades
     const response = await fetch(
       `${this.baseUrl}/api/analysis${qs ? `?${qs}` : ""}`,
     );
@@ -172,9 +168,6 @@ export class ApiClient {
   }
 }
 
-/**
- * WebSocket client for real-time updates from the backend.
- */
 export class WsClient {
   private ws: WebSocket | null = null;
   private wsUrl: string;
@@ -198,7 +191,6 @@ export class WsClient {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.isConnecting = false;
-        // Send initial ping immediately on connect
         this.sendPing();
       };
 
@@ -208,7 +200,7 @@ export class WsClient {
           this.emit(message.type, message);
           this.emit("*", message);
         } catch {
-          // Ignore invalid messages
+          // ignore malformed frames
         }
       };
 
@@ -248,7 +240,6 @@ export class WsClient {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /** Send a JSON ping to the backend. The backend replies with {type:"pong"}. */
   sendPing(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "ping" }));
@@ -267,7 +258,6 @@ export class WsClient {
   }
 }
 
-// Singleton instances
 let apiClient: ApiClient | null = null;
 let wsClient: WsClient | null = null;
 

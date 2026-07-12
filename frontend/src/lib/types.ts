@@ -1,11 +1,3 @@
-/**
- * Types for the PenguinX BTC end-of-window micro-profit simulation frontend.
- */
-
-// ============================================
-// Trade types
-// ============================================
-
 export interface SimulatedTrade {
   id: string;
   marketId: string | null;
@@ -18,54 +10,38 @@ export interface SimulatedTrade {
   entryTs: string;
   entryPrice: string;
   entryShares: string;
-  /** Budget allocated from portfolio (portfolioValue / slots) */
   positionBudget: string;
-  /** Actual USD spent (shares × avgFillPrice + fees) */
   actualCost: string;
   entryFees: string | null;
   fillStatus: string | null;
   btcPriceAtEntry: string | null;
+  /** Strike: the window-open BTC price */
   btcTargetPrice: string | null;
+  /** Signed distance in favour of the entered side */
   btcDistanceUsd: string | null;
-  /** BTC momentum direction at entry */
-  momentumDirection: string | null;
-  /** BTC momentum change in USD at entry */
-  momentumChangeUsd: string | null;
+  /** Vol-adjusted distance z-score at entry */
+  entryZ: string | null;
+  /** BTC $/sec realized volatility at entry */
+  entrySigma: string | null;
+  secondsToEnd: string | null;
   exitPrice: string | null;
   exitTs: string | null;
   exitOutcome: string | null;
-  /** RESOLUTION | STOP_LOSS | TAKE_PROFIT | FORCE_TIMEOUT */
+  /** RESOLUTION | RECROSS | FORCE_TIMEOUT */
   exitReason: string | null;
   realizedPnl: string | null;
-  takeProfitTriggerPrice?: string | null;
-  takeProfitTriggeredAt?: string | null;
-  takeProfitExitPrice?: string | null;
-  takeProfitFees?: string | null;
-  takeProfitPnl?: string | null;
   status: string;
   orderbookSnapshot: unknown;
   raw: unknown;
   createdAt: string;
   updatedAt: string;
-  /** Market end date (ISO string) joined from markets table — used for WINDOW column display */
+  /** Joined from markets table */
   marketEndDate: string | null;
-  /** Market slug joined from markets table — used to build Polymarket event URL */
+  /** Joined from markets table */
   marketSlug: string | null;
-  /** Market question joined from markets table */
+  /** Joined from markets table */
   marketQuestion: string | null;
-  /** Lowest bestBid observed while position was open (before window close) */
-  minPriceDuringPosition: string | null;
-  /** Crossover data for oscillation analysis */
-  crossovers?: {
-    all: number;
-    last60s: number;
-    details: Array<{ side: "UP" | "DOWN"; ts: number }>;
-  };
 }
-
-// ============================================
-// Live market types (pushed via WebSocket systemState)
-// ============================================
 
 export interface LiveMarketPrice {
   bid: number;
@@ -77,22 +53,17 @@ export interface LiveMarketInfo {
   marketId: string;
   question: string;
   slug: string | null;
-  endDate: string; // ISO string
-  /** ISO string for when this market's price window opens (endDate - windowDuration) */
+  endDate: string;
+  /** endDate - windowDuration */
   windowStart: string;
   yesTokenId: string;
   noTokenId: string;
   prices: Record<string, LiveMarketPrice>;
-  /** ACTIVE = window open; UPCOMING = window not yet started; ENDED = awaiting resolution */
+  /** ACTIVE = window open; UPCOMING = not yet started; ENDED = awaiting resolution */
   status: "ACTIVE" | "ENDED" | "UPCOMING";
   hasPosition: boolean;
-  /** BTC price captured when the market window opened — the "price to beat" for Up/Down markets */
   btcPriceAtWindowStart: number | null;
 }
-
-// ============================================
-// System stats types
-// ============================================
 
 export interface SystemStats {
   orchestrator: {
@@ -115,36 +86,24 @@ export interface SystemStats {
     };
     btcConnected: boolean;
     btcPrice: number | null;
-    momentum: {
-      direction: "UP" | "DOWN" | "NEUTRAL";
-      changeUsd: number;
-      lookbackMs: number;
-      hasData: boolean;
-    } | null;
+    /** BTC realized per-second volatility in USD (null until enough data) */
+    sigmaPerSec: number | null;
   };
   liveMarkets: LiveMarketInfo[];
   btcPrice: { price: number; timestamp: number } | null;
   config: {
     marketWindow: string;
-    entryPriceThreshold: number;
+    zEntryThreshold: number;
     maxEntryPrice: number;
-    tradeFromWindowSeconds: number;
+    entryFromWindowSeconds: number;
+    sigmaWindowMs: number;
+    minEntryEdge: number;
+    recrossExitEnabled: boolean;
     startingCapital: number;
     maxPositions: number;
-    minBtcDistanceUsd: number;
-    stopLossEnabled: boolean;
-    stopLossPriceTrigger: number;
-    takeProfitEnabled?: boolean;
-    takeProfitTriggerPrice?: number;
-    momentumEnabled?: boolean;
-    momentumLookbackMs?: number;
-    momentumMinChangeUsd?: number;
-    oscillationFilterEnabled?: boolean;
-    oscillationWindowMs?: number;
-    oscillationMaxCrossovers?: number;
-    consecutiveLossPauseLimit?: number;
-    riskAutoResumeEnabled?: boolean;
-    riskAutoResumeCooldownMs?: number;
+    consecutiveLossPauseLimit: number;
+    riskAutoResumeEnabled: boolean;
+    riskAutoResumeCooldownMs: number;
   };
   portfolio?: {
     cashBalance: number;
@@ -153,15 +112,10 @@ export interface SystemStats {
   };
 }
 
-// ============================================
-// Activity log (unified trade events + audit)
-// ============================================
-
 export type ActivityKind =
   | "TRADE_OPENED"
   | "TRADE_WIN"
   | "TRADE_LOSS"
-  | "MOMENTUM_SKIP"
   | "MARKET_RESOLVED"
   | "SYSTEM"
   | "INFO"
@@ -173,16 +127,10 @@ export interface ActivityEntry {
   kind: ActivityKind;
   title: string;
   detail: string;
-  ts: number; // wall-clock ms
-  /** Optional trade data for TRADE_* kinds */
+  ts: number;
   trade?: SimulatedTrade;
-  /** PnL for TRADE_WIN / TRADE_LOSS */
   pnl?: number;
 }
-
-// ============================================
-// Market types
-// ============================================
 
 export interface DiscoveredMarket {
   id: string;
@@ -199,17 +147,8 @@ export interface DiscoveredMarket {
   lastFetchedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  /** Computed by the API: ACTIVE (window open) or ENDED (window closed) */
   computedStatus?: "ACTIVE" | "ENDED";
-  /** Market metadata including crossovers */
-  metadata?: {
-    crossovers?: Array<{ side: "UP" | "DOWN"; ts: number }>;
-  };
 }
-
-// ============================================
-// Performance types
-// ============================================
 
 export interface PerformanceMetrics {
   period: string;
@@ -242,10 +181,6 @@ export interface PortfolioState {
   createdAt: string;
   updatedAt: string;
 }
-
-// ============================================
-// Monte Carlo analysis types
-// ============================================
 
 export interface MonteCarloHistogram {
   min: number;
@@ -298,10 +233,6 @@ export interface MonteCarloResult {
   startingCapital: number;
 }
 
-// ============================================
-// Audit log types
-// ============================================
-
 export interface AuditLog {
   id: string;
   level: string;
@@ -311,19 +242,11 @@ export interface AuditLog {
   createdAt: string;
 }
 
-// ============================================
-// API response types — backend returns arrays directly
-// ============================================
-
 export interface HealthResponse {
   status: string;
   uptime: number;
   [key: string]: unknown;
 }
-
-// ============================================
-// WebSocket types
-// ============================================
 
 export interface WsMessage {
   type:
@@ -334,10 +257,6 @@ export interface WsMessage {
     | "pong";
   data?: unknown;
 }
-
-// ============================================
-// UI helper types
-// ============================================
 
 export type MarketWindow = "5M" | "15M" | "1H" | "4H" | "1D";
 
@@ -357,14 +276,10 @@ export const MARKET_WINDOW_DURATION_MS: Record<MarketWindow, number> = {
   "1D": 24 * 60 * 60 * 1000,
 };
 
-/**
- * Safe duration lookup for API-provided window types.
- * Falls back to 15 minutes when the window type is missing/unknown.
- */
 export function getMarketWindowDurationMs(windowType?: string | null): number {
   if (!windowType) return MARKET_WINDOW_DURATION_MS["15M"];
-  const duration =
+  return (
     MARKET_WINDOW_DURATION_MS[windowType as MarketWindow] ??
-    MARKET_WINDOW_DURATION_MS["15M"];
-  return duration;
+    MARKET_WINDOW_DURATION_MS["15M"]
+  );
 }

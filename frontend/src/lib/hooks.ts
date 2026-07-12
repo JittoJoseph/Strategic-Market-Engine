@@ -14,14 +14,6 @@ import type {
   WsMessage,
 } from "./types";
 
-/**
- * WS-driven trades hook with pagination.
- * - Initial load via REST (PAGE_SIZE=25)
- * - loadMore() fetches the next 25 from the DB
- * - tradeOpened → prepend to list
- * - tradeResolved / stopLossTriggered → update in place
- * No periodic polling.
- */
 const PAGE_SIZE = 25;
 
 export function useTrades(status?: string) {
@@ -30,7 +22,7 @@ export function useTrades(status?: string) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  // Tracks DB-fetched row count (WS-prepended rows don't count toward offset)
+  // DB rows fetched; WS-prepended rows don't count toward offset
   const dbFetchedRef = useRef(0);
 
   const fetchTrades = useCallback(async () => {
@@ -71,7 +63,7 @@ export function useTrades(status?: string) {
       });
       setHasMore(response.length === PAGE_SIZE);
     } catch {
-      // silent — keep existing trades visible
+      // keep existing trades on error
     } finally {
       setLoadingMore(false);
     }
@@ -81,7 +73,6 @@ export function useTrades(status?: string) {
     fetchTrades();
   }, [fetchTrades]);
 
-  // WS-driven updates — no polling
   useEffect(() => {
     const ws = getWsClient();
     ws.connect();
@@ -90,7 +81,6 @@ export function useTrades(status?: string) {
       const trade = (msg.data as { trade?: SimulatedTrade })?.trade;
       if (!trade) return;
       setTrades((prev) => {
-        // Avoid dupes
         if (prev.some((t) => t.id === trade.id)) return prev;
         return [trade, ...prev];
       });
@@ -119,15 +109,10 @@ export function useTrades(status?: string) {
   };
 }
 
-/**
- * Hook providing live market info from the systemState WS broadcast.
- * Seeds initial state from REST /api/active-market at mount so the top section
- * renders immediately, then WS updates take over in real-time.
- */
 export function useLiveMarkets(): LiveMarketInfo[] {
   const [liveMarkets, setLiveMarkets] = useState<LiveMarketInfo[]>([]);
 
-  // Seed from REST on mount so top section isn't blank before first WS broadcast
+  // Seed from REST so the top section renders before the first WS broadcast
   useEffect(() => {
     let cancelled = false;
     getApiClient()
@@ -137,9 +122,7 @@ export function useLiveMarkets(): LiveMarketInfo[] {
           setLiveMarkets((prev) => (prev.length === 0 ? [market] : prev));
         }
       })
-      .catch(() => {
-        /* silently skip if backend not ready */
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -157,8 +140,7 @@ export function useLiveMarkets(): LiveMarketInfo[] {
       if (!incoming) return;
       setLiveMarkets((prev) =>
         incoming.map((m) => {
-          // Preserve last-known prices when the WS update has none yet
-          // (happens briefly right after a market is first registered)
+          // Preserve last-known prices while a just-registered market has none
           if (Object.keys(m.prices).length === 0) {
             const existing = prev.find((p) => p.marketId === m.marketId);
             return existing ? { ...m, prices: existing.prices } : m;
@@ -174,9 +156,6 @@ export function useLiveMarkets(): LiveMarketInfo[] {
   return liveMarkets;
 }
 
-/**
- * Hook to fetch system stats.
- */
 export function useSystemStats() {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -202,16 +181,12 @@ export function useSystemStats() {
   return { stats, loading, error, refetch: fetchStats };
 }
 
-/**
- * Hook to fetch active markets list with pagination (DB-backed, for the Markets tab table).
- */
 export function useActiveMarkets() {
   const [markets, setMarkets] = useState<DiscoveredMarket[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  // Tracks DB-fetched row count (WS-updated rows don't count toward offset)
   const dbFetchedRef = useRef(0);
 
   const PAGE_SIZE = 20;
@@ -252,7 +227,7 @@ export function useActiveMarkets() {
       });
       setHasMore(response.length === PAGE_SIZE);
     } catch {
-      // silent — keep existing markets visible
+      // keep existing markets on error
     } finally {
       setLoadingMore(false);
     }
@@ -273,16 +248,6 @@ export function useActiveMarkets() {
   };
 }
 
-/**
- * Enhanced real-time performance hook.
- *
- * - Fetches initial performance data once on mount (for the given period)
- * - When period changes, re-fetches fresh data
- * - Listens to tradeOpened and tradeResolved WS events
- * - Updates metrics in real-time (wins/losses, PnL, ROI, win rate, etc.)
- * - Recalculates derived metrics efficiently
- * - Does NOT poll the API after initial load
- */
 export function usePerformanceRealtime(
   period: "1D" | "1W" | "1M" | "ALL" = "1D",
 ) {
@@ -292,7 +257,6 @@ export function usePerformanceRealtime(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  // Fetch initial data on mount and when period changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -319,12 +283,10 @@ export function usePerformanceRealtime(
     };
   }, [period]);
 
-  // Real-time updates from WebSocket events
   useEffect(() => {
     const ws = getWsClient();
     ws.connect();
 
-    // Handle tradeOpened: increment open positions, deduct cost from cash, add to investedAmount
     const unsubOpened = ws.on("tradeOpened", (msg: WsMessage) => {
       const trade = (msg.data as any)?.trade as SimulatedTrade | undefined;
       if (!trade) return;
@@ -343,7 +305,6 @@ export function usePerformanceRealtime(
       });
     });
 
-    // Handle tradeResolved: update wins/losses, PnL, and derived metrics
     const unsubResolved = ws.on("tradeResolved", (msg: WsMessage) => {
       const d = msg.data as any;
       const trade = d?.trade as SimulatedTrade | undefined;
@@ -355,21 +316,17 @@ export function usePerformanceRealtime(
       setPerformance((prev) => {
         if (!prev) return prev;
 
-        // Update win/loss counts
         const newWins = prev.wins + (isWin ? 1 : 0);
         const newLosses = prev.losses + (isWin ? 0 : 1);
         const newClosedPositions = newWins + newLosses;
 
-        // Update PnL values
         const oldTotalPnl = parseFloat(prev.totalPnl || "0");
         const newTotalPnl = oldTotalPnl + pnl;
 
-        // When a trade settles, cash is returned (actualCost) + pnl added back
         const actualCost = parseFloat(trade.actualCost || "0");
         const oldCashBalance = parseFloat(prev.cashBalance || "0");
         const newCashBalance = oldCashBalance + actualCost + pnl;
 
-        // Reduce open positions value by the cost that was deployed
         const oldOpenPositionsValue = parseFloat(
           prev.openPositionsValue || "0",
         );
@@ -378,8 +335,6 @@ export function usePerformanceRealtime(
           oldOpenPositionsValue - actualCost,
         );
 
-        // ROI = (portfolioValue - initialCapital) / initialCapital × 100
-        // (same formula as the backend performance-calculator)
         const initialCapital = parseFloat(prev.initialCapital || "0");
         const newPortfolioValue = newCashBalance + newOpenPositionsValue;
         const newRoi =
@@ -387,19 +342,16 @@ export function usePerformanceRealtime(
             ? ((newPortfolioValue - initialCapital) / initialCapital) * 100
             : 0;
 
-        // Calculate win rate
         const newWinRate =
           newClosedPositions > 0
             ? ((newWins / newClosedPositions) * 100).toFixed(2)
             : "0.00";
 
-        // Track best and worst trades
         const oldBestTrade = parseFloat(prev.largestWin || "0");
         const oldWorstTrade = parseFloat(prev.largestLoss || "0");
         const newBestTrade = Math.max(oldBestTrade, Math.max(0, pnl));
         const newWorstTrade = Math.min(oldWorstTrade, Math.min(0, pnl));
 
-        // Update open positions
         const newOpenPositions = Math.max(0, prev.openPositions - 1);
 
         return {
@@ -427,24 +379,14 @@ export function usePerformanceRealtime(
   return { performance, loading, error };
 }
 
-/**
- * Hook to calculate unrealized PnL from open trades and live market prices.
- *
- * - Looks at all OPEN trades from the trades hook
- * - Uses live market prices from liveMarkets to calculate current value
- * - Recalculates every time trades or prices update
- * - Returns the sum of all unrealized PnLs across open positions
- */
 export function useUnrealizedPnL(
   trades: SimulatedTrade[],
   liveMarkets: LiveMarketInfo[],
 ): number {
   return useMemo(() => {
-    // Filter for open trades only
     const openTrades = trades.filter((t) => t.status === "OPEN");
     if (openTrades.length === 0) return 0;
 
-    // Build a tokenId → current price map from live markets
     const priceMap: Record<string, number> = {};
     for (const market of liveMarkets) {
       for (const [tokenId, priceData] of Object.entries(market.prices)) {
@@ -452,7 +394,6 @@ export function useUnrealizedPnL(
       }
     }
 
-    // Calculate unrealized PnL for each open trade
     let totalUnrealized = 0;
     for (const trade of openTrades) {
       if (!trade.tokenId || !priceMap[trade.tokenId]) continue;
@@ -461,24 +402,13 @@ export function useUnrealizedPnL(
       const currentPrice = priceMap[trade.tokenId];
       const shares = parseFloat(trade.entryShares || "0");
 
-      // For YES tokens (long): profit if price up
-      // For NO tokens (short): profit if price down
-      // PnL = (currentPrice - entryPrice) * shares
-      const tradePnL = (currentPrice - entryPrice) * shares;
-      totalUnrealized += tradePnL;
+      totalUnrealized += (currentPrice - entryPrice) * shares;
     }
 
     return totalUnrealized;
   }, [trades, liveMarkets]);
 }
 
-/**
- * Hook to animate a number from old value to new value.
- *
- * - Smoothly interpolates from prev value to new value over duration
- * - Uses requestAnimationFrame for smooth 60fps animation
- * - Useful for animated counters, percentages, etc.
- */
 export function useAnimatedNumber(
   targetValue: number,
   duration: number = 300,
@@ -492,12 +422,10 @@ export function useAnimatedNumber(
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // If this is the first mount, set display value immediately
     if (displayValue === targetValue) {
       return;
     }
 
-    // Start animation
     animationRef.current = {
       startValue: displayValue,
       startTime: Date.now(),
@@ -509,8 +437,6 @@ export function useAnimatedNumber(
 
       const elapsed = Date.now() - animationRef.current.startTime;
       const progress = Math.min(elapsed / duration, 1);
-
-      // Easing: ease-out for natural deceleration
       const easeProgress = 1 - Math.pow(1 - progress, 3);
 
       const current =
@@ -523,7 +449,6 @@ export function useAnimatedNumber(
       if (progress < 1) {
         rafRef.current = requestAnimationFrame(animate);
       } else {
-        // Set exact value at end to avoid floating point errors
         setDisplayValue(animationRef.current.endValue);
         animationRef.current = null;
       }
@@ -541,11 +466,6 @@ export function useAnimatedNumber(
   return displayValue;
 }
 
-/**
- * Hook for WebSocket connection status.
- * Sends a JSON ping to the backend every 15 s; isConnected flips to true
- * only after receiving a pong, and resets to false if none arrives within 20 s.
- */
 export function useWsConnection() {
   const [isConnected, setIsConnected] = useState(false);
   const pongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -556,17 +476,14 @@ export function useWsConnection() {
 
     const resetPongTimeout = () => {
       if (pongTimerRef.current) clearTimeout(pongTimerRef.current);
-      // If no pong within 20 s, mark disconnected
       pongTimerRef.current = setTimeout(() => setIsConnected(false), 20_000);
     };
 
-    // Listen for pong responses
     const unsubPong = ws.on("pong", () => {
       setIsConnected(true);
       resetPongTimeout();
     });
 
-    // Send ping now and every 15 s
     const sendPing = () => ws.sendPing();
     sendPing();
     const pingInterval = setInterval(sendPing, 15_000);
@@ -581,9 +498,6 @@ export function useWsConnection() {
   return isConnected;
 }
 
-/**
- * Hook for subscribing to specific WebSocket events.
- */
 export function useWsEvent(
   eventType: string,
   callback: (message: WsMessage) => void,
@@ -596,9 +510,6 @@ export function useWsEvent(
   }, [eventType, callback]);
 }
 
-/**
- * Countdown timer hook — returns { days, hours, minutes, seconds, expired }.
- */
 export function useCountdown(endDate: string | null) {
   const calcRemaining = useCallback(() => {
     if (!endDate) return null;
@@ -632,9 +543,6 @@ export function useCountdown(endDate: string | null) {
   return remaining;
 }
 
-/**
- * Hook to track system status and connectivity.
- */
 export function useSystemStatus() {
   const [backendActive, setBackendActive] = useState(true);
   const wsConnected = useWsConnection();
@@ -656,22 +564,18 @@ export function useSystemStatus() {
   return { backendActive, wsConnected };
 }
 
-// ── helper: map AuditLog → ActivityEntry ─────────────────────────────────────
 function auditLogToActivity(log: AuditLog): ActivityEntry {
   const cat = log.category?.toUpperCase() ?? "";
   let kind: ActivityEntry["kind"] = "INFO";
   if (cat.includes("TRADE_RESOLVED") || cat.includes("TRADE_SETTLED"))
-    kind = "TRADE_WIN"; // will be refined below by level
+    kind = "TRADE_WIN";
   else if (cat.includes("TRADE_OPENED")) kind = "TRADE_OPENED";
   else if (cat.includes("TRADE_FORCE") || cat.includes("LOSS"))
     kind = "TRADE_LOSS";
-  else if (cat.includes("SKIP") || cat.includes("MOMENTUM"))
-    kind = "MOMENTUM_SKIP";
   else if (cat.includes("MARKET")) kind = "MARKET_RESOLVED";
   else if (log.level === "warn") kind = "WARN";
   else if (log.level === "error") kind = "ERROR";
 
-  // Refine TRADE_RESOLVED: look at metadata for outcome
   if (kind === "TRADE_WIN" && log.metadata) {
     const outcome = (log.metadata as any)?.outcome as string | undefined;
     if (outcome === "LOSS") kind = "TRADE_LOSS";
@@ -694,20 +598,11 @@ function auditLogToActivity(log: AuditLog): ActivityEntry {
 
 const MAX_ACTIVITY_ENTRIES = 100;
 
-/**
- * Activity log hook.
- *
- * - Seeds from GET /api/audit?limit=30 at mount (one-time REST call)
- * - Appends real-time entries from `tradeOpened` and `tradeResolved` WS events
- * - Never polls the API again after initial load
- * - Capped at MAX_ACTIVITY_ENTRIES to prevent unbounded growth
- */
 export function useActivityLog() {
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const seenIds = useRef<Set<string>>(new Set());
 
-  // One-time REST seed on mount
   useEffect(() => {
     let cancelled = false;
     getApiClient()
@@ -716,13 +611,11 @@ export function useActivityLog() {
         if (cancelled) return;
         const entries = logs
           .map(auditLogToActivity)
-          .sort((a, b) => b.ts - a.ts); // newest first
+          .sort((a, b) => b.ts - a.ts);
         entries.forEach((e) => seenIds.current.add(e.id));
         setActivities(entries);
       })
-      .catch(() => {
-        /* silently skip if backend not ready */
-      })
+      .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -731,7 +624,6 @@ export function useActivityLog() {
     };
   }, []);
 
-  // Real-time: tradeOpened
   useEffect(() => {
     const ws = getWsClient();
     ws.connect();
@@ -750,14 +642,13 @@ export function useActivityLog() {
       const btc = trade.btcPriceAtEntry
         ? ` BTC $${parseFloat(trade.btcPriceAtEntry).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
         : "";
-      const momentum = (trade as any).momentum;
-      const momStr = momentum ? ` mom:${momentum.direction}` : "";
+      const zStr = trade.entryZ ? ` z:${parseFloat(trade.entryZ).toFixed(2)}` : "";
 
       const entry: ActivityEntry = {
         id,
         kind: "TRADE_OPENED",
         title: "TRADE OPENED",
-        detail: `${outcome} ${price}${btc}${momStr} — $${trade.actualCost}`,
+        detail: `${outcome} ${price}${btc}${zStr} — $${trade.actualCost}`,
         ts: Date.now(),
         trade,
       };
@@ -765,7 +656,6 @@ export function useActivityLog() {
       setActivities((prev) => [entry, ...prev].slice(0, MAX_ACTIVITY_ENTRIES));
     });
 
-    // Real-time: tradeResolved
     const unsubResolved = ws.on("tradeResolved", (msg: WsMessage) => {
       const d = msg.data as any;
       const trade = d?.trade as SimulatedTrade | undefined;

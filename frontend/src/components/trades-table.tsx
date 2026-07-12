@@ -1,19 +1,15 @@
 "use client";
 
 import type { SimulatedTrade, LiveMarketPrice } from "@/lib/types";
-import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
-import { pnlColor, formatPnl } from "@/lib/utils";
+import { pnlColor } from "@/lib/utils";
 import NumberFlow from "@number-flow/react";
 
 interface TradesTableProps {
   trades: SimulatedTrade[];
   loading: boolean;
-  /** Real-time bid/ask/mid prices keyed by tokenId, refreshed every ~2s from WS */
   livePrices?: Record<string, LiveMarketPrice>;
-  /** Market end dates keyed by marketId — fallback when trade.marketEndDate is absent */
   marketEndDates?: Record<string, string>;
   onTradeClick?: (trade: SimulatedTrade) => void;
-  /** Called when user clicks Show More */
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
@@ -50,7 +46,7 @@ export function TradesTable({
           No trades yet
         </div>
         <div className="text-xs text-muted-foreground/50 font-mono">
-          Waiting for end-of-window opportunities…
+          Waiting for volatility-barrier opportunities…
         </div>
       </div>
     );
@@ -95,16 +91,13 @@ export function TradesTable({
             const isClosed = trade.status === "SETTLED";
             const isOpen = trade.status === "OPEN";
 
-            // Exit price for closed trades
             const exitPrice = trade.exitPrice
               ? parseFloat(trade.exitPrice)
               : null;
             const exitCents =
               exitPrice !== null ? Math.round(exitPrice * 100) : null;
 
-            // After market endDate passes the oracle hasn't resolved yet —
-            // the CLOB WS still quotes the token until final settlement.
-            // Keep showing the live price so we can track PnL while we wait.
+            // Oracle hasn't resolved yet but the CLOB WS keeps quoting: track live PnL until settlement
             const livePrice =
               isOpen && trade.tokenId
                 ? (livePrices[trade.tokenId] ?? null)
@@ -113,7 +106,6 @@ export function TradesTable({
             const liveCents =
               liveMid !== null ? Math.round(liveMid * 100) : null;
 
-            // isPending: market window closed but trade not yet resolved
             const marketEndDate =
               isOpen && trade.marketId && marketEndDates[trade.marketId]
                 ? new Date(marketEndDates[trade.marketId]!)
@@ -123,15 +115,12 @@ export function TradesTable({
               marketEndDate !== null &&
               marketEndDate.getTime() <= Date.now();
 
-            // Unrealized P&L for open trades: (currentMid - entryPrice) * shares - fees
             const unrealizedPnl =
               liveMid !== null ? (liveMid - entryPrice) * shares - fees : null;
 
-            // Realized P&L for closed trades
             const realizedPnl = parseFloat(trade.realizedPnl || "0");
             const hasPnl = isClosed && !!trade.realizedPnl;
 
-            // P&L percentages
             const realizedPnlPct =
               actualCost > 0 ? (realizedPnl / actualCost) * 100 : 0;
             const unrealizedPnlPct =
@@ -139,7 +128,6 @@ export function TradesTable({
                 ? (unrealizedPnl / actualCost) * 100
                 : null;
 
-            // Window label
             const endDate = trade.marketId
               ? (marketEndDates[trade.marketId] ?? null)
               : null;
@@ -153,7 +141,6 @@ export function TradesTable({
                   idx % 2 === 0 ? "bg-transparent" : "bg-card/5"
                 } ${trade.status === "OPEN" ? "bg-emerald-500/5" : ""}`}
               >
-                {/* WINDOW */}
                 <td className="py-3 px-3">
                   <div className="flex flex-col gap-0.5">
                     <span className="text-foreground text-xs">
@@ -165,7 +152,6 @@ export function TradesTable({
                   </div>
                 </td>
 
-                {/* SIDE */}
                 <td className="py-3 px-3">
                   <span
                     className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider ${
@@ -179,14 +165,12 @@ export function TradesTable({
                   </span>
                 </td>
 
-                {/* ENTRY */}
                 <td className="py-3 px-3 text-right">
                   <span className="text-foreground tabular-nums">
                     {entryCents}¢
                   </span>
                 </td>
 
-                {/* EXIT */}
                 <td className="py-3 px-3 text-right">
                   {exitCents !== null ? (
                     <span
@@ -226,12 +210,10 @@ export function TradesTable({
                   )}
                 </td>
 
-                {/* SHARES */}
                 <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
                   <NumberFlow value={shares} format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }} />
                 </td>
 
-                {/* P&L */}
                 <td className="py-3 px-3 text-right">
                   {hasPnl ? (
                     <div className="flex flex-col items-end gap-0.5">
@@ -274,7 +256,6 @@ export function TradesTable({
                   )}
                 </td>
 
-                {/* STATUS */}
                 <td className="py-3 px-3 text-right">
                   {isClosed ? (
                     <span
@@ -306,7 +287,6 @@ export function TradesTable({
         </tbody>
       </table>
 
-      {/* Show More */}
       {(hasMore || loadingMore) && (
         <div className="flex justify-center pt-3 pb-1">
           <button
@@ -329,24 +309,15 @@ export function TradesTable({
   );
 }
 
-/* ─── Helpers ──────────────────────────────────────────────── */
-
 function extractTimeWindow(
   trade: SimulatedTrade,
   marketEndDate: string | null,
 ): { time: string; date: string } {
-  const windowType = trade.windowType as MarketWindow | null;
-  const label = windowType
-    ? (MARKET_WINDOW_LABELS[windowType] ?? windowType)
-    : null;
-
   const fmtTime = (d: Date) =>
     d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // Prefer trade.marketEndDate (from backend join), then fall back to prop
   const endDateStr = trade.marketEndDate ?? marketEndDate;
 
-  // Prefer showing the market window END time (closes at)
   if (endDateStr) {
     const endDate = new Date(endDateStr);
     return {
@@ -358,7 +329,6 @@ function extractTimeWindow(
     };
   }
 
-  // Fallback: show entry time when end date isn't available
   const entryDate = new Date(trade.entryTs);
   return {
     time: fmtTime(entryDate),

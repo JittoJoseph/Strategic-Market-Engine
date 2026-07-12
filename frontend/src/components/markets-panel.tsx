@@ -41,7 +41,6 @@ function getMarketTradeStatus(
     return { tookTrade: false, outcome: null };
   }
 
-  // Check if any trade has a realized P&L (indicating it's resolved)
   const resolvedTrade = marketTrades.find(
     (trade) => trade.realizedPnl !== null,
   );
@@ -50,7 +49,6 @@ function getMarketTradeStatus(
     return { tookTrade: true, outcome: pnl > 0 ? "WIN" : "LOSS" };
   }
 
-  // If there are open trades, we took a trade but it's not resolved yet
   return { tookTrade: true, outcome: null };
 }
 
@@ -87,7 +85,6 @@ export function MarketsPanel({
   refetch,
   onMarketClick,
 }: MarketsPanelProps) {
-  // Auto-refresh when the active market ends
   useEffect(() => {
     if (!refetch || markets.length === 0) return;
 
@@ -137,7 +134,6 @@ export function MarketsPanel({
             <th className="text-left py-2 px-2 font-medium">DATE</th>
             <th className="text-left py-2 px-2 font-medium">STATUS</th>
             <th className="text-center py-2 px-2 font-medium">TRADE</th>
-            <th className="text-right py-2 px-2 font-medium">CROSSOVERS</th>
             <th className="text-right py-2 px-2 font-medium">TIME LEFT</th>
           </tr>
         </thead>
@@ -151,8 +147,6 @@ export function MarketsPanel({
               : fallbackLabel;
             const href = polymarketMarketUrl(market);
 
-            // Compute status from API's computedStatus field, fallback to
-            // local calculation
             const status: "ACTIVE" | "ENDED" = market.computedStatus
               ? market.computedStatus
               : market.endDate &&
@@ -215,9 +209,6 @@ export function MarketsPanel({
                     </span>
                   )}
                 </td>
-                <td className="py-2.5 px-2 text-right tabular-nums text-foreground">
-                  {market.metadata?.crossovers?.length || 0}
-                </td>
                 <td className="py-2.5 px-2 text-right tabular-nums text-muted-foreground">
                   {market.endDate ? (
                     isActive ? (
@@ -241,7 +232,6 @@ export function MarketsPanel({
         </tbody>
       </table>
 
-      {/* Show More */}
       {(hasMore || loadingMore) && (
         <div className="flex justify-center pt-3 pb-1">
           <button
