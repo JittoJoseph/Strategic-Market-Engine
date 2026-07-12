@@ -37,27 +37,14 @@ export function loadConfig(): Config {
     },
     strategy: {
       marketWindow: env("MARKET_WINDOW", "5M"),
-      tradeFromWindowSeconds: envNum("TRADE_FROM_WINDOW_SECONDS", 90),
-      entryPriceThreshold: envNum("ENTRY_PRICE_THRESHOLD", 0.94),
+      entryFromWindowSeconds: envNum("ENTRY_FROM_WINDOW_SECONDS", 30),
       maxEntryPrice: envNum("MAX_ENTRY_PRICE", 0.98),
-      maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 5),
-      minBtcDistanceUsd: envNum("MIN_BTC_DISTANCE_USD", 50),
+      zEntryThreshold: envNum("Z_ENTRY_THRESHOLD", 3.0),
+      sigmaWindowMs: envNum("SIGMA_WINDOW_MS", 60_000),
+      minEntryEdge: envNum("MIN_ENTRY_EDGE", 0),
+      recrossExitEnabled: envBool("RECROSS_EXIT_ENABLED", true),
+      maxSimultaneousPositions: envNum("MAX_SIMULTANEOUS_POSITIONS", 3),
       scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60_000),
-      // Stop-loss: sell if token bid drops below this price WHILE window is still open
-      stopLossEnabled: envBool("STOP_LOSS_ENABLED", true),
-      stopLossPriceTrigger: envNum("STOP_LOSS_PRICE_TRIGGER", 0.75),
-      // Take-profit: trigger a simulated market sell when bid reaches this level
-      takeProfitEnabled: envBool("TAKE_PROFIT_ENABLED", true),
-      takeProfitTriggerPrice: envNum("TAKE_PROFIT_TRIGGER_PRICE", 0.88),
-      // Momentum filter
-      momentumEnabled: envBool("MOMENTUM_ENABLED", true),
-      momentumLookbackMs: envNum("MOMENTUM_LOOKBACK_MS", 90_000),
-      momentumMinChangeUsd: envNum("MOMENTUM_MIN_CHANGE_USD", 20),
-      // Oscillation filter
-      oscillationFilterEnabled: envBool("OSCILLATION_FILTER_ENABLED", true),
-      oscillationWindowMs: envNum("OSCILLATION_WINDOW_MS", 60_000),
-      oscillationMaxCrossovers: envNum("OSCILLATION_MAX_CROSSOVERS", 3),
-      // Risk guardrails
       consecutiveLossPauseLimit: envNum("CONSECUTIVE_LOSS_PAUSE_LIMIT", 3),
       riskAutoResumeEnabled: envBool("RISK_AUTO_RESUME_ENABLED", false),
       riskAutoResumeCooldownMs: envNum("RISK_AUTO_RESUME_COOLDOWN_MS", 300_000),

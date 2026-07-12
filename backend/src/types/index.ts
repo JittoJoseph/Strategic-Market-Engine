@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// ============================================
-// Window Configuration
-// ============================================
-
 export const MARKET_WINDOWS = ["5M", "15M", "1H", "4H", "1D"] as const;
 export type MarketWindow = (typeof MARKET_WINDOWS)[number];
 
@@ -59,10 +55,6 @@ export const WINDOW_CONFIGS: Record<MarketWindow, WindowConfig> = {
   },
 };
 
-// ============================================
-// API URL Constants (hardcoded, not env vars)
-// ============================================
-
 export const POLY_URLS = {
   GAMMA_API_BASE: "https://gamma-api.polymarket.com",
   CLOB_BASE: "https://clob.polymarket.com",
@@ -70,44 +62,15 @@ export const POLY_URLS = {
   RTDS_WS: "wss://ws-live-data.polymarket.com",
 } as const;
 
-// ============================================
-// Momentum Signal
-// ============================================
-
-export interface MomentumSignal {
-  /** Net direction of BTC over the lookback window */
-  direction: "UP" | "DOWN" | "NEUTRAL";
-  /** Raw USD change over lookback window (positive = up, negative = down) */
-  changeUsd: number;
-  /** Lookback window in milliseconds */
-  lookbackMs: number;
-  /** Whether enough historical data exists to compute signal */
-  hasData: boolean;
-}
-
-// ============================================
-// Fee Constants (from Polymarket docs)
-// For 5-Min & 15-Min Crypto markets:
-//   fee = C × feeRate × (p × (1-p))^exponent
-//   feeRate = 0.25, exponent = 2, maker rebate = 20%
-// ============================================
-
+// Polymarket crypto (5M/15M) fee per share = RATE·(p·(1-p))^EXPONENT, 20% maker rebate
 export const CRYPTO_FEE = {
   RATE: 0.25,
   EXPONENT: 2,
   MAKER_REBATE_PERCENT: 0.2,
 } as const;
 
-/**
- * Polymarket protocol minimum order size (in shares).
- * Returned by the CLOB orderbook API as `min_order_size`.
- * This is a protocol-level constant — not configurable.
- */
+// Protocol minimum order size in shares (CLOB orderbook `min_order_size`)
 export const POLYMARKET_MIN_ORDER_SIZE = 5;
-
-// ============================================
-// Configuration Schema
-// ============================================
 
 export const ConfigSchema = z.object({
   db: z.object({
@@ -118,26 +81,14 @@ export const ConfigSchema = z.object({
   }),
   strategy: z.object({
     marketWindow: z.enum(MARKET_WINDOWS),
-    tradeFromWindowSeconds: z.number().min(5).max(600),
-    entryPriceThreshold: z.number().min(0.5).max(0.99),
-    maxEntryPrice: z.number().min(0.5).max(0.99),
+    entryFromWindowSeconds: z.number().min(5).max(300),
+    maxEntryPrice: z.number().min(0.5).max(0.999),
+    zEntryThreshold: z.number().min(0.5).max(20),
+    sigmaWindowMs: z.number().min(10_000).max(600_000),
+    minEntryEdge: z.number().min(0).max(0.5),
+    recrossExitEnabled: z.boolean(),
     maxSimultaneousPositions: z.number().min(1).max(100),
-    minBtcDistanceUsd: z.number().min(0).max(100000),
     scanIntervalMs: z.number().min(10000),
-    stopLossEnabled: z.boolean(),
-    stopLossPriceTrigger: z.number().min(0.01).max(0.95),
-    // Take-profit (absolute trigger price). Trigger only; realized exit uses live orderbook.
-    takeProfitEnabled: z.boolean(),
-    takeProfitTriggerPrice: z.number().min(0.01).max(0.99),
-    // Momentum filter
-    momentumEnabled: z.boolean(),
-    momentumLookbackMs: z.number().min(10_000).max(600_000),
-    momentumMinChangeUsd: z.number().min(0).max(1000),
-    // Oscillation filter — skip opportunities when BTC is choppy around the target
-    oscillationFilterEnabled: z.boolean(),
-    oscillationWindowMs: z.number().min(10_000).max(300_000),
-    oscillationMaxCrossovers: z.number().min(1).max(20),
-    // Drawdown guardrails
     consecutiveLossPauseLimit: z.number().min(0).max(20),
     riskAutoResumeEnabled: z.boolean(),
     riskAutoResumeCooldownMs: z.number().min(10_000).max(24 * 60 * 60 * 1000),
@@ -156,10 +107,6 @@ export const ConfigSchema = z.object({
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
-
-// ============================================
-// Gamma API Types
-// ============================================
 
 export const GammaTagSchema = z.object({
   id: z.number().or(z.string()),
@@ -220,10 +167,6 @@ export const GammaEventSchema = z.object({
 });
 export type GammaEvent = z.infer<typeof GammaEventSchema>;
 
-// ============================================
-// CLOB API Types
-// ============================================
-
 export const OrderbookLevelSchema = z.object({
   price: z.string(),
   size: z.string(),
@@ -244,15 +187,8 @@ export const OrderbookSchema = z.object({
 export type Orderbook = z.infer<typeof OrderbookSchema>;
 export type OrderbookLevel = z.infer<typeof OrderbookLevelSchema>;
 
-export const PriceResponseSchema = z.object({ price: z.string() });
-export type PriceResponse = z.infer<typeof PriceResponseSchema>;
-
 export const MidpointResponseSchema = z.object({ mid: z.string() });
 export type MidpointResponse = z.infer<typeof MidpointResponseSchema>;
-
-// ============================================
-// API Response Wrapper
-// ============================================
 
 export interface ApiResponse<T> {
   success: boolean;
