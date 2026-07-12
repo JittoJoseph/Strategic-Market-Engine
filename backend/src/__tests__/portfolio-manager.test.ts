@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { PortfolioManager } from "../services/portfolio-manager.js";
 
-// Mock logger
 vi.mock("../utils/logger.js", () => {
   const noop = () => {};
   const childLogger = {
@@ -19,7 +18,6 @@ vi.mock("../utils/logger.js", () => {
   };
 });
 
-// Mock config
 vi.mock("../utils/config.js", () => ({
   getConfig: () => ({
     portfolio: { startingCapital: 100 },
@@ -29,16 +27,14 @@ vi.mock("../utils/config.js", () => ({
   }),
 }));
 
-// Mock calculateFeePerShare (avoid circular dep issues in tests)
 vi.mock("../services/execution-simulator.js", () => ({
   calculateFeePerShare: (price: number) => {
-    // Simplified: crypto fee = 0.25 * (p*(1-p))^2
+    // crypto fee = 0.25 * (p*(1-p))^2
     const pq = price * (1 - price);
     return Math.round(0.25 * Math.pow(pq, 2) * 10000) / 10000;
   },
 }));
 
-// Mock DB — in-memory single portfolio row
 let portfolioRow: { initialCapital: string; cashBalance: string } | null = null;
 
 vi.mock("../db/client.js", () => ({
@@ -64,12 +60,10 @@ describe("PortfolioManager", () => {
   let pm: PortfolioManager;
 
   beforeEach(async () => {
-    portfolioRow = null; // Reset DB
+    portfolioRow = null;
     pm = new PortfolioManager();
     await pm.init();
   });
-
-  // ── Initialization ──────────────────────────────────────────
 
   it("initialises with correct starting capital", () => {
     expect(pm.getCashBalance()).toBe(100);
@@ -77,7 +71,6 @@ describe("PortfolioManager", () => {
   });
 
   it("reload() refreshes from DB", async () => {
-    // Simulate external DB update
     portfolioRow!.cashBalance = "75.50";
     await pm.reload();
     expect(pm.getCashBalance()).toBe(75.5);
@@ -88,12 +81,7 @@ describe("PortfolioManager", () => {
     await expect(pm.reload()).rejects.toThrow("Portfolio row missing");
   });
 
-  // ── Position sizing (budget sized at maxEntryPrice=0.97) ─────
-
-  // Fee at maxEntryPrice=0.97: pq=0.97*0.03=0.0291, fee=0.25*(0.0291)^2≈0.0002
-  // costPerShare = 0.97 + 0.0002 = 0.9702
-  // minBudget = 0.9702 * 5 = 4.851
-
+  // minBudget = 5 shares × (0.97 + fee≈0.0002) ≈ 4.851
   it("computes budget = portfolioValue / maxPositions", () => {
     // Portfolio value = 100 cash + 0 open = 100, 5 positions → raw = 20
     // max(20, 4.851) = 20, capped at cash(100) → 20
@@ -109,7 +97,6 @@ describe("PortfolioManager", () => {
   });
 
   it("caps budget at available cash", async () => {
-    // Reduce cash to $15
     await pm.deductCash(85);
     expect(pm.getCashBalance()).toBe(15);
 
@@ -142,8 +129,6 @@ describe("PortfolioManager", () => {
     expect(budget).toBe(0);
   });
 
-  // ── Cash mutations ───────────────────────────────────────────
-
   it("deductCash reduces balance and persists to DB", async () => {
     const result = await pm.deductCash(19.5);
     expect(result).toBe(true);
@@ -154,7 +139,7 @@ describe("PortfolioManager", () => {
   it("deductCash rejects when insufficient funds", async () => {
     const result = await pm.deductCash(200);
     expect(result).toBe(false);
-    expect(pm.getCashBalance()).toBe(100); // Unchanged
+    expect(pm.getCashBalance()).toBe(100);
   });
 
   it("addCash increases balance and persists to DB", async () => {

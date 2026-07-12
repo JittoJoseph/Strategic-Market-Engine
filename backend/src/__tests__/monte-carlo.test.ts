@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MonteCarloResult } from "../services/monte-carlo.js";
 
-// Mock logger
 vi.mock("../utils/logger.js", () => {
   const noop = () => {};
   const childLogger = {
@@ -19,7 +18,6 @@ vi.mock("../utils/logger.js", () => {
   };
 });
 
-// In-memory settled trades for testing
 let mockTrades: Array<{
   realizedPnl: string | null;
   actualCost: string;
@@ -30,7 +28,6 @@ let mockTrades: Array<{
 let mockPortfolio: { initialCapital: string; cashBalance: string } | null =
   null;
 
-// Mock DB — select(...).from(...).where(...) is now the full chain (no .orderBy)
 vi.mock("../db/client.js", () => ({
   getDb: () => ({
     select: () => ({
@@ -42,7 +39,6 @@ vi.mock("../db/client.js", () => ({
   getPortfolio: vi.fn(async () => mockPortfolio),
 }));
 
-// Mock schema
 vi.mock("../db/schema.js", () => ({
   simulatedTrades: {
     status: "status",
@@ -51,7 +47,6 @@ vi.mock("../db/schema.js", () => ({
   },
 }));
 
-// Mock drizzle-orm operators
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((_col: any, val: any) => ({ op: "eq", val })),
 }));
@@ -66,7 +61,6 @@ describe("Monte Carlo Analysis", () => {
     simulations?: number;
     tradesPerSim?: number;
   }) {
-    // Dynamic import to pick up mocks
     const { runMonteCarloAnalysis } =
       await import("../services/monte-carlo.js");
     return runMonteCarloAnalysis(overrides);
@@ -159,7 +153,6 @@ describe("Monte Carlo Analysis", () => {
   });
 
   it("generates correct number of histogram buckets", async () => {
-    // Need enough trades to run
     mockTrades = Array(20)
       .fill(null)
       .map((_, i) => ({
@@ -171,8 +164,7 @@ describe("Monte Carlo Analysis", () => {
 
     const result = await importAndRun({ simulations: 500, tradesPerSim: 50 });
 
-    expect(result.distribution.histogram.length).toBe(20); // 20 buckets
-    // Sum of all bucket counts should equal # simulations
+    expect(result.distribution.histogram.length).toBe(20);
     const totalCount = result.distribution.histogram.reduce(
       (s, b) => s + b.count,
       0,
@@ -197,11 +189,10 @@ describe("Monte Carlo Analysis", () => {
       5, 25, 50, 75, 95,
     ]);
 
-    // Each curve should have tradesPerSim + 1 points (including starting point)
     for (const curve of result.equityCurves) {
-      expect(curve.curve.length).toBe(21); // 20 trades + starting point
+      expect(curve.curve.length).toBe(21); // tradesPerSim + starting point
       expect(curve.curve[0]!.tradeIndex).toBe(0);
-      expect(curve.curve[0]!.balance).toBe(100); // starting capital
+      expect(curve.curve[0]!.balance).toBe(100);
     }
   });
 
@@ -285,7 +276,7 @@ describe("Monte Carlo Analysis", () => {
   });
 
   it("uses realizedPnl not exitOutcome to determine win/loss", async () => {
-    // Stop-loss that sold above entry — exitOutcome would be LOSS but pnl is positive
+    // pnl > 0 even if exitOutcome were LOSS → classified as a win
     mockTrades = [
       {
         realizedPnl: "0.02",
@@ -297,7 +288,6 @@ describe("Monte Carlo Analysis", () => {
 
     const result = await importAndRun({ simulations: 100, tradesPerSim: 10 });
 
-    // Even though this might have exitOutcome=LOSS, we classify by PnL > 0 → win
     expect(result.historical.wins).toBe(1);
     expect(result.historical.losses).toBe(0);
   });

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 
-// Mock the logger module before importing execution-simulator
 vi.mock("../utils/logger.js", () => {
   const noop = () => {};
   const childLogger = {
@@ -30,9 +29,6 @@ import {
 } from "../services/execution-simulator.js";
 import type { Orderbook } from "../types/index.js";
 
-/**
- * Helper to build a mock orderbook for testing.
- */
 function makeOrderbook(
   asks: Array<{ price: string; size: string }>,
   bids: Array<{ price: string; size: string }>,
@@ -50,10 +46,6 @@ function makeOrderbook(
   };
 }
 
-// ============================================
-// simulateLimitBuy — crypto fee always applied
-// ============================================
-
 describe("simulateLimitBuy", () => {
   it("fills at all ask levels at or below the limit price", () => {
     const orderbook = makeOrderbook(
@@ -65,7 +57,6 @@ describe("simulateLimitBuy", () => {
       [{ price: "0.92", size: "100" }],
     );
 
-    // Limit at 0.95 — should fill 0.93 and 0.95, skip 0.97
     const result = simulateLimitBuy(orderbook, 1000, 0.95);
 
     expect(result.fillDetails.length).toBe(2);
@@ -93,7 +84,6 @@ describe("simulateLimitBuy", () => {
   it("respects the USD budget", () => {
     const orderbook = makeOrderbook([{ price: "0.50", size: "1000" }], []);
 
-    // $1 budget at $0.50/share — crypto fees will reduce the shares slightly
     const result = simulateLimitBuy(orderbook, 1, 0.5);
 
     expect(result.totalShares).toBeGreaterThan(1.5);
@@ -203,10 +193,6 @@ describe("simulateLimitBuy", () => {
   });
 });
 
-// ============================================
-// simulateLimitSell — crypto fee always applied
-// ============================================
-
 describe("simulateLimitSell", () => {
   it("fills at bid levels at or above the limit price", () => {
     const orderbook = makeOrderbook(
@@ -285,10 +271,6 @@ describe("simulateLimitSell", () => {
   });
 });
 
-// ============================================
-// PnL Calculation Helpers
-// ============================================
-
 describe("calculateFeePerShare", () => {
   it("returns near-zero fee at extreme prices", () => {
     const fee97 = calculateFeePerShare(0.97);
@@ -338,7 +320,7 @@ describe("calculateLossAmount", () => {
 });
 
 describe("calculateEarlyExitPnl", () => {
-  it("calculates partial loss for stop-loss exit", () => {
+  it("calculates partial loss for a below-entry early exit", () => {
     const pnl = calculateEarlyExitPnl(0.95, 0.8, 10, 0.01, 0.005);
     expect(pnl).toBeCloseTo(-1.515, 4);
   });
@@ -348,9 +330,9 @@ describe("calculateEarlyExitPnl", () => {
     expect(pnl).toBeCloseTo(1.98, 4);
   });
 
-  it("stop-loss loss is smaller than full loss", () => {
+  it("an early exit loses less than holding a full loss", () => {
     const fullLoss = calculateLossAmount(0.95, 10, 0.01);
-    const stopLoss = calculateEarlyExitPnl(0.95, 0.8, 10, 0.01, 0.005);
-    expect(stopLoss).toBeGreaterThan(fullLoss);
+    const earlyExit = calculateEarlyExitPnl(0.95, 0.8, 10, 0.01, 0.005);
+    expect(earlyExit).toBeGreaterThan(fullLoss);
   });
 });
