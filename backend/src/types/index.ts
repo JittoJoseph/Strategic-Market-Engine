@@ -90,9 +90,8 @@ export const ConfigSchema = z.object({
     zEntryThreshold: z.number().min(0.5).max(20),
     sigmaWindowMs: z.number().min(10_000).max(600_000),
     minEntryEdge: z.number().min(0).max(0.5),
-    // Exit when BTC is offside of the strike by more than offsideExitK·σ·√secondsLeft.
-    offsideExitEnabled: z.boolean(),
-    offsideExitK: z.number().min(0).max(10),
+    stopLossEnabled: z.boolean(),
+    stopLossDelta: z.number().min(0).max(1),
     scanIntervalMs: z.number().min(10000),
     consecutiveLossPauseLimit: z.number().min(0).max(20),
     riskAutoResumeEnabled: z.boolean(),

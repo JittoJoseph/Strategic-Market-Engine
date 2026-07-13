@@ -23,8 +23,8 @@ async function main(): Promise<void> {
       sigmaWindowMs: config.strategy.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
       budget: `pv/${config.portfolio.budgetDivisor} clamp[${config.portfolio.budgetMinUsd},${config.portfolio.budgetMaxUsd}]`,
-      offsideExit: config.strategy.offsideExitEnabled
-        ? `k=${config.strategy.offsideExitK}`
+      stopLoss: config.strategy.stopLossEnabled
+        ? `${(config.strategy.stopLossDelta * 100).toFixed(0)}¢ below entry`
         : "disabled",
     },
     "Configuration loaded",

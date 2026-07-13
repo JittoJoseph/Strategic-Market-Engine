@@ -27,7 +27,7 @@ export interface SimulatedTrade {
   exitPrice: string | null;
   exitTs: string | null;
   exitOutcome: string | null;
-  /** RESOLUTION | OFFSIDE | FORCE_TIMEOUT */
+  /** RESOLUTION | STOP_LOSS */
   exitReason: string | null;
   realizedPnl: string | null;
   status: string;
@@ -97,8 +97,8 @@ export interface SystemStats {
     entryFromWindowSeconds: number;
     sigmaWindowMs: number;
     minEntryEdge: number;
-    offsideExitEnabled: boolean;
-    offsideExitK: number;
+    stopLossEnabled: boolean;
+    stopLossDelta: number;
     startingCapital: number;
 
     entryPriceFloor: number;

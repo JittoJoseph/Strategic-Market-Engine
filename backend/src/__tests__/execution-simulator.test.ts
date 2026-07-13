@@ -21,7 +21,6 @@ import {
   simulateLimitBuy,
   simulateLimitSell,
   calculateWinProfit,
-  calculateLossAmount,
   calculateEarlyExitPnl,
   calculateFeePerShare,
   type ExecutionResult,
@@ -307,18 +306,6 @@ describe("calculateWinProfit", () => {
   });
 });
 
-describe("calculateLossAmount", () => {
-  it("calculates full loss for a losing trade", () => {
-    const loss = calculateLossAmount(0.95, 10, 0.01);
-    expect(loss).toBeCloseTo(-9.51, 4);
-  });
-
-  it("loss is always negative", () => {
-    const loss = calculateLossAmount(0.5, 1, 0);
-    expect(loss).toBeLessThan(0);
-  });
-});
-
 describe("calculateEarlyExitPnl", () => {
   it("calculates partial loss for a below-entry early exit", () => {
     const pnl = calculateEarlyExitPnl(0.95, 0.8, 10, 0.01, 0.005);
@@ -331,7 +318,7 @@ describe("calculateEarlyExitPnl", () => {
   });
 
   it("an early exit loses less than holding a full loss", () => {
-    const fullLoss = calculateLossAmount(0.95, 10, 0.01);
+    const fullLoss = -(0.95 * 10 + 0.01);
     const earlyExit = calculateEarlyExitPnl(0.95, 0.8, 10, 0.01, 0.005);
     expect(earlyExit).toBeGreaterThan(fullLoss);
   });

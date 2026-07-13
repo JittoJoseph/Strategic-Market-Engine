@@ -238,14 +238,6 @@ export function calculateWinProfit(
   return (1.0 - entryPrice) * shares - fees;
 }
 
-export function calculateLossAmount(
-  entryPrice: number,
-  shares: number,
-  fees: number,
-): number {
-  return -(entryPrice * shares + fees);
-}
-
 /** Realized PnL when exiting a position before oracle resolution. */
 export function calculateEarlyExitPnl(
   entryPrice: number,

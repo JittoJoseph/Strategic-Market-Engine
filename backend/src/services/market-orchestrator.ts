@@ -27,7 +27,6 @@ import {
   simulateLimitBuy,
   simulateLimitSell,
   calculateWinProfit,
-  calculateLossAmount,
   calculateEarlyExitPnl,
 } from "./execution-simulator.js";
 import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
@@ -68,9 +67,7 @@ interface OpenPosition {
   /** Cash spent (shares × avgPrice + fees); the cost basis for portfolio value. */
   actualCost: number;
   marketEndDate: Date;
-  /** Window-start strike this position resolves against, for offside-exit detection. */
-  strike: number | null;
-  exitTriggered?: boolean;
+  stopTriggered?: boolean;
 }
 
 /**
@@ -373,10 +370,7 @@ export class MarketOrchestrator extends EventEmitter {
       this.onMarketResolved(ev),
     );
 
-    this.btcWatcher.on("btcPriceUpdate", (data) => {
-      this.tryFillBtcWindowStart();
-      this.checkOffsideExits(data.price);
-    });
+    this.btcWatcher.on("btcPriceUpdate", () => this.tryFillBtcWindowStart());
 
     this.strategyEngine.on("opportunityDetected", (opp: MarketOpportunity) => {
       this.onOpportunity(opp).catch((err) => {
@@ -563,6 +557,41 @@ export class MarketOrchestrator extends EventEmitter {
       this.btcWatcher.getCurrentPrice(),
       sigmaPerSec,
     );
+
+    this.checkStopLoss(tokenId, bestBid);
+  }
+  private checkStopLoss(tokenId: string, bestBid: number): void {
+    const config = getConfig();
+    if (!config.strategy.stopLossEnabled) return;
+
+    const tradeIds = this.positionsByToken.get(tokenId);
+    if (!tradeIds) return;
+
+    const now = Date.now();
+    for (const tradeId of tradeIds) {
+      const pos = this.openPositions.get(tradeId);
+      if (!pos || pos.stopTriggered) continue;
+      if (pos.marketEndDate.getTime() <= now) continue; // settled at resolution
+      if (bestBid > pos.entryPrice - config.strategy.stopLossDelta) continue;
+
+      pos.stopTriggered = true;
+      logger.warn(
+        {
+          tradeId,
+          entryPrice: pos.entryPrice.toFixed(4),
+          bestBid: bestBid.toFixed(4),
+          stopLevel: (pos.entryPrice - config.strategy.stopLossDelta).toFixed(
+            4,
+          ),
+        },
+        "Stop-loss breached — exiting at market",
+      );
+      this.executeStopLoss(tradeId, pos).catch((err) => {
+        logger.error({ err, tradeId }, "Stop-loss exit failed");
+        const p = this.openPositions.get(tradeId);
+        if (p) p.stopTriggered = false;
+      });
+    }
   }
 
   private async onMarketResolved(ev: MarketResolvedEvent): Promise<void> {
@@ -587,22 +616,14 @@ export class MarketOrchestrator extends EventEmitter {
       const state = this.activeMarkets.get(row.id);
       if (!state || state.resolved) return;
       state.resolved = true;
-      await this.resolvePositionsForMarket(
-        row.id,
-        winningAssetId,
-        winningOutcome,
-      );
+      await this.settleMarketPositions(row.id, winningAssetId, winningOutcome);
       return;
     }
 
     const state = this.activeMarkets.get(marketId);
     if (!state || state.resolved) return;
     state.resolved = true;
-    await this.resolvePositionsForMarket(
-      marketId,
-      winningAssetId,
-      winningOutcome,
-    );
+    await this.settleMarketPositions(marketId, winningAssetId, winningOutcome);
   }
 
   /**
@@ -767,10 +788,9 @@ export class MarketOrchestrator extends EventEmitter {
         fees: execution.fees,
         actualCost,
         marketEndDate: market?.endDate ?? new Date(),
-        strike: opp.strike,
       });
 
-      this.scheduleResolutionMonitor(opp.marketId);
+      this.scheduleSettlementWatch(opp.marketId);
 
       await logAudit(
         "info",
@@ -837,95 +857,29 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  private checkOffsideExits(btcPrice: number): void {
-    const config = getConfig();
-    if (!config.strategy.offsideExitEnabled) return;
-    if (this.openPositions.size === 0) return;
-
-    const now = Date.now();
-    const sigma = this.btcWatcher.getRealizedVol(config.strategy.sigmaWindowMs);
-
-    for (const [tradeId, pos] of this.openPositions) {
-      if (pos.exitTriggered) continue;
-      if (pos.strike === null) continue;
-
-      const secondsLeft = (pos.marketEndDate.getTime() - now) / 1000;
-      if (secondsLeft <= 0) continue; // window closed — outcome locked
-
-      const signedDistance =
-        pos.outcomeLabel === "Up"
-          ? btcPrice - pos.strike
-          : pos.strike - btcPrice;
-      if (signedDistance >= 0) continue; // still onside
-
-      // Move BTC could plausibly make in the time left. If sigma is unknown, fall
-      // back to exiting on any offside (conservative).
-      const barrier =
-        sigma && sigma > 0
-          ? config.strategy.offsideExitK * sigma * Math.sqrt(secondsLeft)
-          : 0;
-      if (-signedDistance < barrier) continue; // offside but within noise — hold
-
-      pos.exitTriggered = true;
-      logger.warn(
-        {
-          tradeId,
-          outcome: pos.outcomeLabel,
-          strike: pos.strike.toFixed(2),
-          btcPrice: btcPrice.toFixed(2),
-          offsideUsd: (-signedDistance).toFixed(2),
-          barrierUsd: barrier.toFixed(2),
-          secondsLeft: secondsLeft.toFixed(1),
-        },
-        "Offside barrier breached — exiting",
-      );
-      this.executeOffsideExit(tradeId, pos).catch((err) => {
-        logger.error({ err, tradeId }, "Offside exit failed");
-        const p = this.openPositions.get(tradeId);
-        if (p) p.exitTriggered = false;
-      });
-    }
-  }
-
-  /**
-   * FAK market-sell the position into the live book (accept any bid), classify
-   * by realized PnL, and settle the trade with reason OFFSIDE.
-   */
-  private async executeOffsideExit(
+  private async executeStopLoss(
     tradeId: string,
     pos: OpenPosition,
   ): Promise<void> {
     try {
-      const orderbookResult = await this.client.getOrderbook(pos.tokenId);
-
+      const book = (await this.client.getOrderbook(pos.tokenId))?.data;
       const fallbackBid =
         this.strategyEngine.getPriceState(pos.tokenId)?.bestBid ?? 0;
-      let exitPrice: number;
+      let exitPrice = fallbackBid;
       let exitFees = 0;
 
-      if (orderbookResult?.data && orderbookResult.data.bids?.length > 0) {
-        const sellResult = simulateLimitSell(
-          orderbookResult.data,
-          pos.entryShares,
-          0, // accept any bid — full market sell
-        );
-        exitPrice =
-          sellResult.totalSharesSold > 0
-            ? sellResult.averagePrice
-            : fallbackBid;
-        exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
-        if (sellResult.isPartialFill) {
+      if (book && book.bids?.length > 0) {
+        const sell = simulateLimitSell(book, pos.entryShares, 0);
+        if (sell.totalSharesSold > 0) {
+          exitPrice = sell.averagePrice;
+          exitFees = sell.fees;
+        }
+        if (sell.isPartialFill) {
           logger.warn(
-            {
-              tradeId,
-              sold: sellResult.totalSharesSold,
-              total: pos.entryShares,
-            },
-            "Offside exit partial fill — insufficient bid liquidity",
+            { tradeId, sold: sell.totalSharesSold, total: pos.entryShares },
+            "Stop-loss partial fill — insufficient bid liquidity",
           );
         }
-      } else {
-        exitPrice = fallbackBid;
       }
 
       const pnl = calculateEarlyExitPnl(
@@ -936,18 +890,16 @@ export class MarketOrchestrator extends EventEmitter {
         exitFees,
       );
       const isWin = pnl > 0;
-      const outcome = isWin ? "WIN" : "LOSS";
-
-      const sellProceeds = pos.entryShares * exitPrice - exitFees;
-      if (sellProceeds > 0) await this.portfolioManager.addCash(sellProceeds);
+      const proceeds = pos.entryShares * exitPrice - exitFees;
+      if (proceeds > 0) await this.portfolioManager.addCash(proceeds);
 
       await resolveTrade(
         tradeId,
-        outcome,
+        isWin ? "WIN" : "LOSS",
         pnl.toFixed(6),
         exitPrice.toFixed(6),
         {
-          exitReason: "OFFSIDE",
+          exitReason: "STOP_LOSS",
         },
       );
       this.updateConsecutiveLossState(isWin);
@@ -955,8 +907,8 @@ export class MarketOrchestrator extends EventEmitter {
 
       await logAudit(
         "warn",
-        "OFFSIDE_EXIT",
-        `Offside exit for trade ${tradeId}: exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)} (${outcome})`,
+        "STOP_LOSS",
+        `Stop-loss for trade ${tradeId}: exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)}`,
         {
           tradeId,
           tokenId: pos.tokenId,
@@ -964,21 +916,17 @@ export class MarketOrchestrator extends EventEmitter {
           exitPrice,
           exitFees,
           pnl,
-          outcome,
         },
       );
-
       logger.info(
         {
           tradeId,
           marketId: pos.marketId,
-          outcome: pos.outcomeLabel,
           entryPrice: pos.entryPrice.toFixed(4),
           exitPrice: exitPrice.toFixed(4),
           pnl: pnl.toFixed(4),
-          classification: outcome,
         },
-        "🔀 Offside exit executed",
+        "🛑 Stop-loss executed",
       );
 
       this.emit("tradeResolved", {
@@ -989,50 +937,41 @@ export class MarketOrchestrator extends EventEmitter {
         trade: null,
       });
     } catch (error) {
-      logger.error({ error, tradeId }, "Offside exit execution error");
+      logger.error({ error, tradeId }, "Stop-loss execution error");
       logAudit(
         "error",
         "SYSTEM",
-        `Offside exit error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Stop-loss error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
       const position = this.openPositions.get(tradeId);
-      if (position) position.exitTriggered = false;
+      if (position) position.stopTriggered = false;
     }
   }
-
-  private scheduleResolutionMonitor(marketId: string): void {
+  private scheduleSettlementWatch(marketId: string): void {
     if (this.resolutionTimers.has(marketId)) return;
 
     const FAST_INTERVAL = 5_000;
     const SLOW_INTERVAL = 30_000;
     const FAST_PHASE_MS = 2 * 60_000;
-    const HARD_TIMEOUT_MS = 30 * 60_000;
     const startTime = Date.now();
 
+    const stop = () => {
+      const t = this.resolutionTimers.get(marketId);
+      if (t) clearTimeout(t);
+      this.resolutionTimers.delete(marketId);
+    };
+
     const poll = async () => {
-      if (!this.running) {
-        clearTimeout(timerId);
-        this.resolutionTimers.delete(marketId);
+      if (!this.running || !this.hasOpenPositionsForMarket(marketId)) {
+        stop();
         return;
       }
-
+      await this.pollSettlement(marketId);
       if (!this.hasOpenPositionsForMarket(marketId)) {
-        clearTimeout(timerId);
-        this.resolutionTimers.delete(marketId);
+        stop();
         return;
       }
-
       const elapsed = Date.now() - startTime;
-
-      if (elapsed > HARD_TIMEOUT_MS) {
-        clearTimeout(timerId);
-        this.resolutionTimers.delete(marketId);
-        await this.forceResolveExpired(marketId);
-        return;
-      }
-
-      await this.pollResolution(marketId);
-
       const interval = elapsed < FAST_PHASE_MS ? FAST_INTERVAL : SLOW_INTERVAL;
       timerId = setTimeout(poll, interval);
       this.resolutionTimers.set(marketId, timerId);
@@ -1041,59 +980,40 @@ export class MarketOrchestrator extends EventEmitter {
     let timerId = setTimeout(poll, FAST_INTERVAL);
     this.resolutionTimers.set(marketId, timerId);
   }
-
-  private async pollResolution(marketId: string): Promise<void> {
+  private async pollSettlement(marketId: string): Promise<void> {
+    const RESOLVE_THRESHOLD = 0.99;
     try {
       const market = await this.client.getMarketById(marketId);
       if (!market) return;
-      if (!market.closed) return;
-
-      const state = this.activeMarkets.get(marketId);
-      if (state) state.resolved = true;
 
       const outcomes = PolymarketClient.parseOutcomes(market);
       const prices = PolymarketClient.parseOutcomePrices(market);
       const tokenIds = PolymarketClient.parseClobTokenIds(market);
 
-      let winningTokenId: string | null = null;
-      let winningOutcome: string | null = null;
+      const winIdx = prices.findIndex((p) => p >= RESOLVE_THRESHOLD);
+      if (winIdx < 0) return; // not yet decisive — poll again
 
-      for (let i = 0; i < outcomes.length; i++) {
-        const price = prices[i] ?? 0;
-        if (price >= 0.99) {
-          winningTokenId = tokenIds[i] ?? null;
-          winningOutcome = outcomes[i] ?? null;
-          break;
-        }
-      }
+      const winningTokenId = tokenIds[winIdx];
+      const winningOutcome = outcomes[winIdx];
+      if (!winningTokenId || !winningOutcome) return;
 
-      if (winningTokenId && winningOutcome) {
-        await this.resolvePositionsForMarket(
-          marketId,
-          winningTokenId,
-          winningOutcome,
-        );
-
-        const timer = this.resolutionTimers.get(marketId);
-        if (timer) {
-          clearInterval(timer);
-          this.resolutionTimers.delete(marketId);
-        }
-      }
+      const state = this.activeMarkets.get(marketId);
+      if (state) state.resolved = true;
+      await this.settleMarketPositions(
+        marketId,
+        winningTokenId,
+        winningOutcome,
+      );
     } catch (error) {
-      logger.error({ error, marketId }, "Resolution poll failed");
+      logger.error({ error, marketId }, "Settlement poll failed");
       logAudit(
         "error",
         "SYSTEM",
-        `Resolution poll failed for market ${marketId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Settlement poll failed for market ${marketId}: ${error instanceof Error ? error.message : String(error)}`,
       ).catch(() => {});
     }
   }
-
-  /**
-   * Resolve all open positions for a market.
-   */
-  private async resolvePositionsForMarket(
+  private async settleMarketPositions(
     marketId: string,
     winningTokenId: string,
     winningOutcome: string,
@@ -1102,43 +1022,32 @@ export class MarketOrchestrator extends EventEmitter {
       if (pos.marketId !== marketId) continue;
 
       const isWin = pos.tokenId === winningTokenId;
-      const exitPrice = isWin ? 1.0 : 0.0;
-      const pnl = isWin
-        ? calculateWinProfit(pos.entryPrice, pos.entryShares, pos.fees)
-        : calculateLossAmount(pos.entryPrice, pos.entryShares, pos.fees);
-
-      // Return the original investment plus realized PnL.
-      const cashReturn = pos.actualCost + pnl;
-      if (cashReturn > 0) {
-        await this.portfolioManager.addCash(cashReturn);
-      }
+      const redemption = isWin ? pos.entryShares : 0;
+      const pnl = redemption - pos.actualCost;
+      if (redemption > 0) await this.portfolioManager.addCash(redemption);
 
       const resolvedTrade = await resolveTrade(
         tradeId,
         isWin ? "WIN" : "LOSS",
         pnl.toFixed(6),
-        exitPrice.toFixed(6),
+        (isWin ? 1 : 0).toFixed(6),
         { exitReason: "RESOLUTION" },
       );
-
       this.updateConsecutiveLossState(isWin);
+      this.untrackPosition(tradeId);
 
       await logAudit(
         "info",
         "TRADE_RESOLVED",
-        `Trade ${tradeId} resolved: ${isWin ? "WIN" : "LOSS"}`,
+        `Trade ${tradeId} resolved: ${isWin ? "WIN" : "LOSS"} (${winningOutcome})`,
         {
           tradeId,
           outcome: isWin ? "WIN" : "LOSS",
-          exitPrice,
           pnl,
           winningOutcome,
           cashBalance: this.portfolioManager.getCashBalance(),
         },
       );
-
-      this.untrackPosition(tradeId);
-
       logger.info(
         {
           tradeId,
@@ -1153,62 +1062,13 @@ export class MarketOrchestrator extends EventEmitter {
         tradeId,
         isWin,
         pnl,
-        exitPrice,
+        exitPrice: isWin ? 1 : 0,
         trade: resolvedTrade,
       });
     }
 
     if (!this.hasOpenPositionsForMarket(marketId)) {
       this.cleanupMarket(marketId);
-    }
-  }
-
-  /**
-   * Force-resolve expired positions after resolution watch hard timeout.
-   *
-   * First attempts one final API poll. If positions remain unresolved after
-   * that, they are force-closed as LOSS (conservative).
-   */
-  private async forceResolveExpired(marketId: string): Promise<void> {
-    await this.pollResolution(marketId);
-
-    const remaining: [string, OpenPosition][] = [];
-    for (const [tradeId, pos] of this.openPositions) {
-      if (pos.marketId === marketId) remaining.push([tradeId, pos]);
-    }
-
-    for (const [tradeId, pos] of remaining) {
-      const pnl = calculateLossAmount(
-        pos.entryPrice,
-        pos.entryShares,
-        pos.fees,
-      );
-
-      await resolveTrade(tradeId, "LOSS", pnl.toFixed(6), "0", {
-        exitReason: "FORCE_TIMEOUT",
-      });
-      this.updateConsecutiveLossState(false);
-      this.untrackPosition(tradeId);
-
-      await logAudit(
-        "warn",
-        "TRADE_FORCE_RESOLVED",
-        `Trade ${tradeId} force-resolved as LOSS after timeout`,
-        { tradeId, marketId, pnl },
-      );
-
-      logger.warn(
-        { tradeId, marketId, pnl: pnl.toFixed(4) },
-        "Position force-resolved as LOSS after timeout",
-      );
-
-      this.emit("tradeResolved", {
-        tradeId,
-        isWin: false,
-        pnl,
-        exitPrice: 0,
-        trade: null,
-      });
     }
   }
 
@@ -1284,11 +1144,9 @@ export class MarketOrchestrator extends EventEmitter {
         fees: parseFloat(trade.entryFees ?? "0"),
         actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
-        // Restored from the trade's recorded window-start price, for offside-exit detection.
-        strike: trade.btcTargetPrice ? parseFloat(trade.btcTargetPrice) : null,
       });
 
-      if (trade.marketId) this.scheduleResolutionMonitor(trade.marketId);
+      if (trade.marketId) this.scheduleSettlementWatch(trade.marketId);
     }
 
     if (rows.length > 0) {

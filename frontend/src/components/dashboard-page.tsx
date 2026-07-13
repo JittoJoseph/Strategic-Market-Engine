@@ -342,14 +342,14 @@ export function DashboardPage() {
                     value={stats.config.minEntryEdge.toString()}
                   />
                   <StatRow
-                    label="Offside Exit"
+                    label="Stop Loss"
                     value={
-                      stats.config.offsideExitEnabled
-                        ? `k=${stats.config.offsideExitK}`
+                      stats.config.stopLossEnabled
+                        ? `${(stats.config.stopLossDelta * 100).toFixed(0)}¢ below entry`
                         : "DISABLED"
                     }
-                    accent={stats.config.offsideExitEnabled}
-                    warn={!stats.config.offsideExitEnabled}
+                    accent={stats.config.stopLossEnabled}
+                    warn={!stats.config.stopLossEnabled}
                   />
                   <StatRow
                     label="Position Budget"

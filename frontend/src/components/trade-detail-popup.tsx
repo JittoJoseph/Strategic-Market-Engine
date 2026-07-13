@@ -421,10 +421,8 @@ function exitReasonLabel(reason: string): string {
   switch (reason) {
     case "RESOLUTION":
       return "Resolved at window close";
-    case "OFFSIDE":
-      return "BTC offside barrier";
-    case "FORCE_TIMEOUT":
-      return "Force timeout";
+    case "STOP_LOSS":
+      return "Stop-loss (market sell)";
     default:
       return reason;
   }
