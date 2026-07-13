@@ -47,7 +47,7 @@ export function loadConfig(): Config {
       sigmaWindowMs: envNum("SIGMA_WINDOW_MS", 60_000),
       minEntryEdge: envNum("MIN_ENTRY_EDGE", 0),
       stopLossEnabled: envBool("STOP_LOSS_ENABLED", true),
-      stopLossDelta: envNum("STOP_LOSS_DELTA", 0.05),
+      stopLossDelta: envNum("STOP_LOSS_DELTA", 0.2),
       scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60_000),
       consecutiveLossPauseLimit: envNum("CONSECUTIVE_LOSS_PAUSE_LIMIT", 3),
       riskAutoResumeEnabled: envBool("RISK_AUTO_RESUME_ENABLED", false),
