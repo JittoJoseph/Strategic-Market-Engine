@@ -41,7 +41,6 @@ export interface PriceUpdateEvent {
   tokenId: string;
   bestBid: string;
   bestAsk: string;
-  midpoint: number;
   timestamp: number;
 }
 

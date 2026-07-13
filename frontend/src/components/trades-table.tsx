@@ -102,9 +102,9 @@ export function TradesTable({
               isOpen && trade.tokenId
                 ? (livePrices[trade.tokenId] ?? null)
                 : null;
-            const liveMid = livePrice?.mid ?? null;
+            const liveBid = livePrice?.bid ?? null;
             const liveCents =
-              liveMid !== null ? Math.round(liveMid * 100) : null;
+              liveBid !== null ? Math.round(liveBid * 100) : null;
 
             const marketEndDate =
               isOpen && trade.marketId && marketEndDates[trade.marketId]
@@ -116,7 +116,7 @@ export function TradesTable({
               marketEndDate.getTime() <= Date.now();
 
             const unrealizedPnl =
-              liveMid !== null ? (liveMid - entryPrice) * shares - fees : null;
+              liveBid !== null ? (liveBid - entryPrice) * shares - fees : null;
 
             const realizedPnl = parseFloat(trade.realizedPnl || "0");
             const hasPnl = isClosed && !!trade.realizedPnl;
@@ -211,7 +211,13 @@ export function TradesTable({
                 </td>
 
                 <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
-                  <NumberFlow value={shares} format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }} />
+                  <NumberFlow
+                    value={shares}
+                    format={{
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 1,
+                    }}
+                  />
                 </td>
 
                 <td className="py-3 px-3 text-right">
@@ -220,12 +226,29 @@ export function TradesTable({
                       <span
                         className={`tabular-nums font-semibold ${pnlColor(realizedPnl)}`}
                       >
-                        <NumberFlow value={realizedPnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
+                        <NumberFlow
+                          value={realizedPnl}
+                          format={{
+                            style: "currency",
+                            currency: "USD",
+                            signDisplay: "always",
+                            minimumFractionDigits: 4,
+                            maximumFractionDigits: 4,
+                          }}
+                        />
                       </span>
                       <span
                         className={`text-[10px] tabular-nums ${pnlColor(realizedPnl, "60")}`}
                       >
-                        <NumberFlow value={realizedPnlPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
+                        <NumberFlow
+                          value={realizedPnlPct}
+                          format={{
+                            signDisplay: "always",
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          }}
+                        />
+                        %
                       </span>
                     </div>
                   ) : unrealizedPnl !== null ? (
@@ -237,7 +260,16 @@ export function TradesTable({
                             : "text-red-400"
                         }`}
                       >
-                        <NumberFlow value={unrealizedPnl} format={{ style: "currency", currency: "USD", signDisplay: "always", minimumFractionDigits: 4, maximumFractionDigits: 4 }} />
+                        <NumberFlow
+                          value={unrealizedPnl}
+                          format={{
+                            style: "currency",
+                            currency: "USD",
+                            signDisplay: "always",
+                            minimumFractionDigits: 4,
+                            maximumFractionDigits: 4,
+                          }}
+                        />
                       </span>
                       {unrealizedPnlPct !== null && (
                         <span
@@ -247,7 +279,15 @@ export function TradesTable({
                               : "text-red-400/60"
                           }`}
                         >
-                          <NumberFlow value={unrealizedPnlPct} format={{ signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 }} />%
+                          <NumberFlow
+                            value={unrealizedPnlPct}
+                            format={{
+                              signDisplay: "always",
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }}
+                          />
+                          %
                         </span>
                       )}
                     </div>

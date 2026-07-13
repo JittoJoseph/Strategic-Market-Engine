@@ -78,10 +78,14 @@ export const ConfigSchema = z.object({
   }),
   portfolio: z.object({
     startingCapital: z.number().min(1).max(10_000_000),
+    budgetDivisor: z.number().min(1).max(100),
+    budgetMinUsd: z.number().min(1).max(10_000),
+    budgetMaxUsd: z.number().min(1).max(1_000_000),
   }),
   strategy: z.object({
     marketWindow: z.enum(MARKET_WINDOWS),
     entryFromWindowSeconds: z.number().min(5).max(300),
+    entryPriceFloor: z.number().min(0).max(0.99),
     maxEntryPrice: z.number().min(0.5).max(0.999),
     zEntryThreshold: z.number().min(0.5).max(20),
     sigmaWindowMs: z.number().min(10_000).max(600_000),
@@ -89,11 +93,13 @@ export const ConfigSchema = z.object({
     // Exit when BTC is offside of the strike by more than offsideExitK·σ·√secondsLeft.
     offsideExitEnabled: z.boolean(),
     offsideExitK: z.number().min(0).max(10),
-    maxSimultaneousPositions: z.number().min(1).max(100),
     scanIntervalMs: z.number().min(10000),
     consecutiveLossPauseLimit: z.number().min(0).max(20),
     riskAutoResumeEnabled: z.boolean(),
-    riskAutoResumeCooldownMs: z.number().min(10_000).max(24 * 60 * 60 * 1000),
+    riskAutoResumeCooldownMs: z
+      .number()
+      .min(10_000)
+      .max(24 * 60 * 60 * 1000),
   }),
   admin: z.object({
     password: z.string().min(1),
@@ -188,9 +194,6 @@ export const OrderbookSchema = z.object({
 
 export type Orderbook = z.infer<typeof OrderbookSchema>;
 export type OrderbookLevel = z.infer<typeof OrderbookLevelSchema>;
-
-export const MidpointResponseSchema = z.object({ mid: z.string() });
-export type MidpointResponse = z.infer<typeof MidpointResponseSchema>;
 
 export interface ApiResponse<T> {
   success: boolean;

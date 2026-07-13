@@ -1,8 +1,6 @@
 import Decimal from "decimal.js";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
-import { calculateFeePerShare } from "./execution-simulator.js";
-import { POLYMARKET_MIN_ORDER_SIZE } from "../types/index.js";
 import {
   getPortfolio,
   initPortfolio,
@@ -11,11 +9,6 @@ import {
 
 const logger = createModuleLogger("portfolio-manager");
 
-/**
- * Tracks the simulated portfolio's cash balance (persisted in DB) and sizes
- * positions at portfolioValue / maxPositions, floored so the budget can always
- * afford the protocol minimum of POLYMARKET_MIN_ORDER_SIZE (5) shares.
- */
 export class PortfolioManager {
   private cashBalance: Decimal = new Decimal(0);
   private initialCapital: Decimal = new Decimal(0);
@@ -33,7 +26,6 @@ export class PortfolioManager {
       {
         initialCapital: this.initialCapital.toString(),
         cashBalance: this.cashBalance.toString(),
-        maxPositions: config.strategy.maxSimultaneousPositions,
       },
       "Portfolio initialised",
     );
@@ -57,41 +49,15 @@ export class PortfolioManager {
     return this.initialCapital.toNumber();
   }
 
-  /**
-   * Budget for the next position, sized at maxEntryPrice (the worst-case price
-   * we'd accept) so it can fill the minimum share count even when every eligible
-   * ask sits at the limit. Returns 0 if cash can't afford that minimum.
-   */
   computePositionBudget(openPositionsValue: number): number {
-    const config = getConfig();
-    const minShares = POLYMARKET_MIN_ORDER_SIZE;
-    const maxPrice = config.strategy.maxEntryPrice;
-    const portfolioValue = this.cashBalance.plus(openPositionsValue);
-    const rawBudget = portfolioValue.div(
-      config.strategy.maxSimultaneousPositions,
-    );
-
-    const feePerShare = calculateFeePerShare(maxPrice);
-    const costPerShare = new Decimal(maxPrice).plus(feePerShare);
-    const minBudget = costPerShare.mul(minShares);
-
-    const budget = Decimal.max(rawBudget, minBudget);
-
-    if (this.cashBalance.lt(minBudget)) {
-      logger.warn(
-        {
-          cash: this.cashBalance.toString(),
-          minBudget: minBudget.toString(),
-          minShares,
-          maxEntryPrice: maxPrice,
-        },
-        `Insufficient cash for ${minShares}-share minimum at maxEntryPrice — skipping`,
-      );
-      return 0;
-    }
-
-    const capped = Decimal.min(budget, this.cashBalance);
-    return capped.toDP(8).toNumber();
+    const { budgetDivisor, budgetMinUsd, budgetMaxUsd } = getConfig().portfolio;
+    const totalPortfolioValue = this.cashBalance.plus(openPositionsValue);
+    return Decimal.max(
+      budgetMinUsd,
+      Decimal.min(budgetMaxUsd, totalPortfolioValue.div(budgetDivisor)),
+    )
+      .toDP(8)
+      .toNumber();
   }
 
   /** Deduct fill cost after a buy; returns false if cash is insufficient. */

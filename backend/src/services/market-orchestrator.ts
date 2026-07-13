@@ -51,7 +51,7 @@ interface ActiveMarketState {
    *  BTC ends >= this value, DOWN otherwise. */
   btcPriceAtWindowStart: number | null;
   outcomes: string[];
-  lastPrices: Record<string, { bid: number; ask: number; mid: number }>;
+  lastPrices: Record<string, { bid: number; ask: number }>;
   subscribedWs: boolean;
   resolved: boolean;
   rawMarket: any;
@@ -140,7 +140,7 @@ export class MarketOrchestrator extends EventEmitter {
         label: windowLabel,
         zEntryThreshold: config.strategy.zEntryThreshold,
         entryFromWindowSec: config.strategy.entryFromWindowSeconds,
-        maxPositions: config.strategy.maxSimultaneousPositions,
+        budgetMaxUsd: config.portfolio.budgetMaxUsd,
         startingCapital: config.portfolio.startingCapital,
       },
       "Starting market orchestrator",
@@ -309,8 +309,6 @@ export class MarketOrchestrator extends EventEmitter {
       this.positionsByToken.set(pos.tokenId, byToken);
     }
     byToken.add(pos.tradeId);
-
-    this.strategyEngine.setOpenPositionCount(this.openPositions.size);
   }
 
   private untrackPosition(tradeId: string): void {
@@ -329,8 +327,6 @@ export class MarketOrchestrator extends EventEmitter {
       byToken.delete(tradeId);
       if (byToken.size === 0) this.positionsByToken.delete(pos.tokenId);
     }
-
-    this.strategyEngine.setOpenPositionCount(this.openPositions.size);
   }
 
   private hasOpenPositionsForMarket(marketId: string): boolean {
@@ -550,8 +546,7 @@ export class MarketOrchestrator extends EventEmitter {
     if (marketId) {
       const state = this.activeMarkets.get(marketId);
       if (state && state.endDate > new Date()) {
-        const mid = (bestBid + bestAsk) / 2;
-        state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk, mid };
+        state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
       }
       // After the window ends, freeze prices until the trade settles.
     }
@@ -649,14 +644,11 @@ export class MarketOrchestrator extends EventEmitter {
       const openPositionsValue = this.computeOpenPositionsValue();
       const positionBudget =
         this.portfolioManager.computePositionBudget(openPositionsValue);
-
-      if (positionBudget <= 0) {
+      const cash = this.portfolioManager.getCashBalance();
+      if (cash < positionBudget) {
         logger.info(
-          {
-            openPositionsValue,
-            cash: this.portfolioManager.getCashBalance(),
-          },
-          "Insufficient cash for minimum share count — skipping",
+          { positionBudget, cash },
+          "Insufficient settled cash for position budget — skipping",
         );
         return;
       }
@@ -721,9 +713,11 @@ export class MarketOrchestrator extends EventEmitter {
 
       const marketState = this.activeMarkets.get(opp.marketId);
       if (marketState && marketState.rawMarket) {
-        const tokenIds = PolymarketClient.parseClobTokenIds(marketState.rawMarket);
+        const tokenIds = PolymarketClient.parseClobTokenIds(
+          marketState.rawMarket,
+        );
         const outcomes = PolymarketClient.parseOutcomes(marketState.rawMarket);
-        
+
         await insertMarketIfNew(opp.marketId, {
           conditionId: marketState.conditionId ?? "",
           slug: marketState.slug ?? undefined,
@@ -843,14 +837,6 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  /**
-   * Exit a position when BTC has moved offside of the strike by more than the
-   * volatility barrier for the time remaining — a recovery would require a move
-   * larger than ~offsideExitK standard deviations of what BTC can plausibly do
-   * before the window closes. A bare strike cross is left alone: it sits in the
-   * noise band and usually reverts. Fires only while the window is open; after
-   * close the Chainlink outcome is locked and further BTC moves are irrelevant.
-   */
   private checkOffsideExits(btcPrice: number): void {
     const config = getConfig();
     if (!config.strategy.offsideExitEnabled) return;
@@ -867,7 +853,9 @@ export class MarketOrchestrator extends EventEmitter {
       if (secondsLeft <= 0) continue; // window closed — outcome locked
 
       const signedDistance =
-        pos.outcomeLabel === "Up" ? btcPrice - pos.strike : pos.strike - btcPrice;
+        pos.outcomeLabel === "Up"
+          ? btcPrice - pos.strike
+          : pos.strike - btcPrice;
       if (signedDistance >= 0) continue; // still onside
 
       // Move BTC could plausibly make in the time left. If sigma is unknown, fall
@@ -910,7 +898,8 @@ export class MarketOrchestrator extends EventEmitter {
     try {
       const orderbookResult = await this.client.getOrderbook(pos.tokenId);
 
-      const fallbackBid = this.strategyEngine.getPriceState(pos.tokenId)?.bestBid ?? 0;
+      const fallbackBid =
+        this.strategyEngine.getPriceState(pos.tokenId)?.bestBid ?? 0;
       let exitPrice: number;
       let exitFees = 0;
 
@@ -921,11 +910,17 @@ export class MarketOrchestrator extends EventEmitter {
           0, // accept any bid — full market sell
         );
         exitPrice =
-          sellResult.totalSharesSold > 0 ? sellResult.averagePrice : fallbackBid;
+          sellResult.totalSharesSold > 0
+            ? sellResult.averagePrice
+            : fallbackBid;
         exitFees = sellResult.totalSharesSold > 0 ? sellResult.fees : 0;
         if (sellResult.isPartialFill) {
           logger.warn(
-            { tradeId, sold: sellResult.totalSharesSold, total: pos.entryShares },
+            {
+              tradeId,
+              sold: sellResult.totalSharesSold,
+              total: pos.entryShares,
+            },
             "Offside exit partial fill — insufficient bid liquidity",
           );
         }
@@ -946,9 +941,15 @@ export class MarketOrchestrator extends EventEmitter {
       const sellProceeds = pos.entryShares * exitPrice - exitFees;
       if (sellProceeds > 0) await this.portfolioManager.addCash(sellProceeds);
 
-      await resolveTrade(tradeId, outcome, pnl.toFixed(6), exitPrice.toFixed(6), {
-        exitReason: "OFFSIDE",
-      });
+      await resolveTrade(
+        tradeId,
+        outcome,
+        pnl.toFixed(6),
+        exitPrice.toFixed(6),
+        {
+          exitReason: "OFFSIDE",
+        },
+      );
       this.updateConsecutiveLossState(isWin);
       this.untrackPosition(tradeId);
 
@@ -980,7 +981,13 @@ export class MarketOrchestrator extends EventEmitter {
         "🔀 Offside exit executed",
       );
 
-      this.emit("tradeResolved", { tradeId, isWin, pnl, exitPrice, trade: null });
+      this.emit("tradeResolved", {
+        tradeId,
+        isWin,
+        pnl,
+        exitPrice,
+        trade: null,
+      });
     } catch (error) {
       logger.error({ error, tradeId }, "Offside exit execution error");
       logAudit(
@@ -993,13 +1000,6 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  /**
-   * Schedule persistent resolution polling for a market.
-   *
-   * Polls every 5s for the first 2 minutes (when auto-resolution typically fires),
-   * then backs off to every 30s. After 30 minutes hard-timeout: force-resolve as
-   * LOSS so positions never stay open indefinitely.
-   */
   private scheduleResolutionMonitor(marketId: string): void {
     if (this.resolutionTimers.has(marketId)) return;
 
@@ -1385,8 +1385,6 @@ export class MarketOrchestrator extends EventEmitter {
       this.wsWatcher.subscribe(tokenIds);
       state.subscribedWs = true;
 
-      // Ended markets no longer stream on the CLOB, so seed lastPrices from REST
-      // midpoints once for the frontend while awaiting oracle resolution.
       if (endDate.getTime() < Date.now() && hasOpenPositions) {
         this.seedLastPricesForEndedMarket(state).catch((err) =>
           logger.debug(
@@ -1415,7 +1413,6 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  /** Seed lastPrices for an ended market from CLOB REST midpoints (no WS stream). */
   private async seedLastPricesForEndedMarket(
     state: ActiveMarketState,
   ): Promise<void> {
@@ -1424,21 +1421,15 @@ export class MarketOrchestrator extends EventEmitter {
     await Promise.all(
       tokenIds.map(async (tokenId) => {
         try {
-          const { mid: midStr } = await this.client.getMidpoint(tokenId);
-          const mid = parseFloat(midStr);
-          if (!isFinite(mid) || mid <= 0) return;
-
-          // Approximate bid/ask as ±0.5¢ around mid.
-          state.lastPrices[tokenId] = {
-            bid: Math.max(0, mid - 0.005),
-            ask: Math.min(1, mid + 0.005),
-            mid,
-          };
-
-          logger.debug(
-            { marketId: state.marketId, tokenId, mid: mid.toFixed(4) },
-            "Seeded lastPrices for ended market from CLOB midpoint",
-          );
+          const book = (await this.client.getOrderbook(tokenId))?.data;
+          if (!book) return;
+          const bid = book.bids.length
+            ? Math.max(...book.bids.map((l) => parseFloat(l.price)))
+            : 0;
+          const ask = book.asks.length
+            ? Math.min(...book.asks.map((l) => parseFloat(l.price)))
+            : 1;
+          state.lastPrices[tokenId] = { bid, ask };
         } catch {
           // Non-fatal: an unquotable expired token just leaves no price.
         }
@@ -1449,7 +1440,7 @@ export class MarketOrchestrator extends EventEmitter {
   /** Raw GammaMarkets for active markets, for API merging. */
   getRawActiveMarkets(): any[] {
     return Array.from(this.activeMarkets.values())
-      .map(state => state.rawMarket)
+      .map((state) => state.rawMarket)
       .filter(Boolean);
   }
 

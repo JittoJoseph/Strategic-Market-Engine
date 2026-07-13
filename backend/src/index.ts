@@ -18,11 +18,11 @@ async function main(): Promise<void> {
     {
       window: config.strategy.marketWindow,
       zEntryThreshold: config.strategy.zEntryThreshold,
-      maxEntryPrice: config.strategy.maxEntryPrice,
+      entryBand: `${config.strategy.entryPriceFloor}–${config.strategy.maxEntryPrice}`,
       entryFromWindowSec: config.strategy.entryFromWindowSeconds,
       sigmaWindowMs: config.strategy.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
-      maxPositions: config.strategy.maxSimultaneousPositions,
+      budget: `pv/${config.portfolio.budgetDivisor} clamp[${config.portfolio.budgetMinUsd},${config.portfolio.budgetMaxUsd}]`,
       offsideExit: config.strategy.offsideExitEnabled
         ? `k=${config.strategy.offsideExitK}`
         : "disabled",

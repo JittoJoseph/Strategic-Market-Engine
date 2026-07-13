@@ -155,6 +155,7 @@ export class ApiServer {
           config: {
             marketWindow: config.strategy.marketWindow,
             zEntryThreshold: config.strategy.zEntryThreshold,
+            entryPriceFloor: config.strategy.entryPriceFloor,
             maxEntryPrice: config.strategy.maxEntryPrice,
             entryFromWindowSeconds: config.strategy.entryFromWindowSeconds,
             sigmaWindowMs: config.strategy.sigmaWindowMs,
@@ -162,7 +163,9 @@ export class ApiServer {
             offsideExitEnabled: config.strategy.offsideExitEnabled,
             offsideExitK: config.strategy.offsideExitK,
             startingCapital: config.portfolio.startingCapital,
-            maxPositions: config.strategy.maxSimultaneousPositions,
+            budgetDivisor: config.portfolio.budgetDivisor,
+            budgetMinUsd: config.portfolio.budgetMinUsd,
+            budgetMaxUsd: config.portfolio.budgetMaxUsd,
             consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
             riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
             riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,

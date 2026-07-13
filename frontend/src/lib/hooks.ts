@@ -386,11 +386,10 @@ export function useUnrealizedPnL(
   return useMemo(() => {
     const openTrades = trades.filter((t) => t.status === "OPEN");
     if (openTrades.length === 0) return 0;
-
     const priceMap: Record<string, number> = {};
     for (const market of liveMarkets) {
       for (const [tokenId, priceData] of Object.entries(market.prices)) {
-        priceMap[tokenId] = priceData.mid;
+        priceMap[tokenId] = priceData.bid;
       }
     }
 
@@ -642,7 +641,9 @@ export function useActivityLog() {
       const btc = trade.btcPriceAtEntry
         ? ` BTC $${parseFloat(trade.btcPriceAtEntry).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
         : "";
-      const zStr = trade.entryZ ? ` z:${parseFloat(trade.entryZ).toFixed(2)}` : "";
+      const zStr = trade.entryZ
+        ? ` z:${parseFloat(trade.entryZ).toFixed(2)}`
+        : "";
 
       const entry: ActivityEntry = {
         id,

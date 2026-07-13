@@ -34,7 +34,6 @@ export interface MarketOpportunity {
   marketId: string;
   tokenId: string;
   outcomeLabel: string; // "Up" or "Down" — always the current favorite
-  midpoint: number;
   bestAsk: number;
   bestBid: number;
   btcPrice: number;
@@ -55,7 +54,6 @@ export interface MarketOpportunity {
 interface TokenPriceState {
   bestBid: number;
   bestAsk: number;
-  midpoint: number;
   lastUpdate: number;
 }
 
@@ -83,7 +81,6 @@ export class StrategyEngine extends EventEmitter {
   private priceStates: Map<string, TokenPriceState> = new Map();
   private watchedMarkets: Map<string, WatchedMarket> = new Map(); // tokenId → market
   private evaluatedTokens: Set<string> = new Set();
-  private openPositionCount = 0;
   private triggersCount = 0;
 
   registerMarket(
@@ -114,10 +111,6 @@ export class StrategyEngine extends EventEmitter {
     if (market) market.strike = strike;
   }
 
-  setOpenPositionCount(count: number): void {
-    this.openPositionCount = count;
-  }
-
   /** Allow the orchestrator to retry a token that failed to fill. */
   clearEvaluated(tokenId: string): void {
     this.evaluatedTokens.delete(tokenId);
@@ -142,13 +135,7 @@ export class StrategyEngine extends EventEmitter {
     btcPriceData: BtcPriceData | null,
     sigmaPerSec: number | null,
   ): void {
-    const midpoint = (bestBid + bestAsk) / 2;
-    this.priceStates.set(tokenId, {
-      bestBid,
-      bestAsk,
-      midpoint,
-      lastUpdate: Date.now(),
-    });
+    this.priceStates.set(tokenId, { bestBid, bestAsk, lastUpdate: Date.now() });
 
     const market = this.watchedMarkets.get(tokenId);
     if (!market) return;
@@ -178,20 +165,19 @@ export class StrategyEngine extends EventEmitter {
 
     const z = signedDistanceUsd / (sigmaPerSec * Math.sqrt(secondsToEnd));
     if (z < config.strategy.zEntryThreshold) return;
-
-    if (bestAsk <= 0 || bestAsk > config.strategy.maxEntryPrice) return;
+    if (
+      bestAsk < config.strategy.entryPriceFloor ||
+      bestAsk > config.strategy.maxEntryPrice
+    )
+      return;
 
     const fairValue = barrierFairValue(z);
     if (fairValue - bestAsk < config.strategy.minEntryEdge) return;
-
-    if (this.openPositionCount >= config.strategy.maxSimultaneousPositions)
-      return;
 
     const opportunity: MarketOpportunity = {
       marketId: market.marketId,
       tokenId,
       outcomeLabel: market.outcomeLabel,
-      midpoint,
       bestAsk,
       bestBid,
       btcPrice: btcPriceData.price,
@@ -211,7 +197,7 @@ export class StrategyEngine extends EventEmitter {
       {
         marketId: market.marketId,
         outcome: market.outcomeLabel,
-        midpoint: midpoint.toFixed(4),
+        bestAsk: bestAsk.toFixed(4),
         z: z.toFixed(2),
         sigmaPerSec: sigmaPerSec.toFixed(3),
         distance: signedDistanceUsd.toFixed(1),

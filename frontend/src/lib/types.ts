@@ -46,7 +46,6 @@ export interface SimulatedTrade {
 export interface LiveMarketPrice {
   bid: number;
   ask: number;
-  mid: number;
 }
 
 export interface LiveMarketInfo {
@@ -101,7 +100,11 @@ export interface SystemStats {
     offsideExitEnabled: boolean;
     offsideExitK: number;
     startingCapital: number;
-    maxPositions: number;
+
+    entryPriceFloor: number;
+    budgetDivisor: number;
+    budgetMinUsd: number;
+    budgetMaxUsd: number;
     consecutiveLossPauseLimit: number;
     riskAutoResumeEnabled: boolean;
     riskAutoResumeCooldownMs: number;

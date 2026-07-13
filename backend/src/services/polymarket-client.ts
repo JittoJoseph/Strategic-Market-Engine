@@ -5,22 +5,14 @@ import {
   POLY_URLS,
   GammaMarketSchema,
   OrderbookSchema,
-  MidpointResponseSchema,
   type GammaMarket,
   type Orderbook,
-  type MidpointResponse,
 } from "../types/index.js";
 import { z } from "zod";
 import { logAudit } from "../db/client.js";
 
 const logger = createModuleLogger("polymarket-client");
 
-/**
- * Polymarket API client for BTC window markets.
- *
- * Gamma API — market discovery (https://gamma-api.polymarket.com)
- * CLOB API — orderbook, price, midpoint, fee rates (https://clob.polymarket.com)
- */
 export class PolymarketClient {
   private gammaApi: AxiosInstance;
   private clobApi: AxiosInstance;
@@ -157,18 +149,6 @@ export class PolymarketClient {
         const raw = response.data;
         const data = OrderbookSchema.parse(raw);
         return { data, raw };
-      },
-      { maxRetries: 3, retryOn: isRateLimitError },
-    );
-  }
-
-  async getMidpoint(tokenId: string): Promise<MidpointResponse> {
-    return withRetry(
-      async () => {
-        const response = await this.clobApi.get("/midpoint", {
-          params: { token_id: tokenId },
-        });
-        return MidpointResponseSchema.parse(response.data);
       },
       { maxRetries: 3, retryOn: isRateLimitError },
     );

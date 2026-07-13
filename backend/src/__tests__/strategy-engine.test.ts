@@ -26,13 +26,13 @@ vi.mock("../utils/config.js", () => ({
     strategy: {
       marketWindow: "5M",
       entryFromWindowSeconds: 60,
+      entryPriceFloor: 0.5,
       maxEntryPrice: 0.98,
       zEntryThreshold: 3.0,
       sigmaWindowMs: 60_000,
       minEntryEdge: 0,
       offsideExitEnabled: true,
       offsideExitK: 1.0,
-      maxSimultaneousPositions: 5,
       scanIntervalMs: 30000,
     },
     portfolio: { startingCapital: 100 },
@@ -156,15 +156,15 @@ describe("StrategyEngine (barrier / z-score)", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("does NOT trigger when position limit is reached", () => {
+  it("does NOT trigger when the ask is below the entry price floor (underdog)", () => {
     const endDate = new Date(Date.now() + 30_000);
     engine.registerMarket("market-1", "token-up", "Up", endDate, 97400);
-    engine.setOpenPositionCount(5);
 
     const handler = vi.fn();
     engine.on("opportunityDetected", handler);
 
-    engine.evaluatePrice("token-up", 0.96, 0.98, btcPrice, SIGMA_PASS);
+    // z clears, but the market prices this side as an underdog: ask 0.45 < floor 0.5 → skip
+    engine.evaluatePrice("token-up", 0.43, 0.45, btcPrice, SIGMA_PASS);
     expect(handler).not.toHaveBeenCalled();
   });
 

@@ -200,7 +200,6 @@ export class MarketWebSocketWatcher extends EventEmitter {
               tokenId: pc.asset_id,
               bestBid: pc.best_bid,
               bestAsk: pc.best_ask,
-              midpoint: (parseFloat(pc.best_bid) + parseFloat(pc.best_ask)) / 2,
               timestamp: ts,
             } satisfies PriceUpdateEvent);
           }
