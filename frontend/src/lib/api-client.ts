@@ -1,7 +1,6 @@
 import type {
   SimulatedTrade,
-  SystemStats,
-  LiveMarketInfo,
+  LiveState,
   DiscoveredMarket,
   PerformanceMetrics,
   PortfolioState,
@@ -65,13 +64,6 @@ export class ApiClient {
     return fetchWithRetry(`${this.baseUrl}/ping`);
   }
 
-  async getActiveMarket(): Promise<LiveMarketInfo | null> {
-    const response = await fetch(`${this.baseUrl}/api/active-market`);
-    if (response.status === 204) return null;
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    return response.json();
-  }
-
   async getMarkets(params?: {
     limit?: number;
     offset?: number;
@@ -84,8 +76,9 @@ export class ApiClient {
     return fetchWithRetry(`${this.baseUrl}/api/markets${qs ? `?${qs}` : ""}`);
   }
 
-  async getSystemStats(): Promise<SystemStats> {
-    return fetchWithRetry(`${this.baseUrl}/api/system/stats`);
+  /** Initial snapshot of the same model the WebSocket streams. */
+  async getLiveState(): Promise<LiveState> {
+    return fetchWithRetry(`${this.baseUrl}/api/live-state`);
   }
 
   async getTrades(params?: {

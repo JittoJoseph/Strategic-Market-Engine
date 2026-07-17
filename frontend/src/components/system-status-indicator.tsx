@@ -1,12 +1,12 @@
 "use client";
 
 import { useSystemStatus } from "@/lib/hooks";
-import type { SystemStats } from "@/lib/types";
+import type { LiveState } from "@/lib/types";
 
 export function SystemStatusIndicator({
   stats,
 }: {
-  stats?: SystemStats | null;
+  stats?: LiveState | null;
 }) {
   const { backendActive, wsConnected } = useSystemStatus();
 

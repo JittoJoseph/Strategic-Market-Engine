@@ -48,6 +48,7 @@ export function loadConfig(): Config {
       minEntryEdge: envNum("MIN_ENTRY_EDGE", 0),
       stopLossEnabled: envBool("STOP_LOSS_ENABLED", true),
       stopLossDelta: envNum("STOP_LOSS_DELTA", 0.2),
+      executionLatencyMs: envNum("EXECUTION_LATENCY_MS", 250),
       scanIntervalMs: envNum("SCAN_INTERVAL_MS", 60_000),
       consecutiveLossPauseLimit: envNum("CONSECUTIVE_LOSS_PAUSE_LIMIT", 3),
       riskAutoResumeEnabled: envBool("RISK_AUTO_RESUME_ENABLED", false),

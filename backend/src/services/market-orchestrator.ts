@@ -6,6 +6,7 @@ import {
   getDb,
   createSimulatedTrade,
   resolveTrade,
+  updateTradeMinPrice,
   logAudit,
   loadOpenTradesWithMarkets,
   insertMarketIfNew,
@@ -33,7 +34,10 @@ import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { PortfolioManager } from "./portfolio-manager.js";
 
-import type { MarketResolvedEvent } from "../interfaces/websocket-types.js";
+import type {
+  BookUpdateEvent,
+  MarketResolvedEvent,
+} from "../interfaces/websocket-types.js";
 
 const logger = createModuleLogger("market-orchestrator");
 
@@ -67,8 +71,12 @@ interface OpenPosition {
   /** Cash spent (shares × avgPrice + fees); the cost basis for portfolio value. */
   actualCost: number;
   marketEndDate: Date;
+  /** Lowest executable bid seen since entry (observational only). */
+  minBid: number;
   stopTriggered?: boolean;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Central coordinator: the scanner finds BTC window markets, this subscribes to
@@ -281,6 +289,17 @@ export class MarketOrchestrator extends EventEmitter {
       });
   }
 
+  /** Live per-position observables for open trades (mirrors the trade rows). */
+  getOpenPositionSnapshots() {
+    return Array.from(this.openPositions.values()).map((pos) => ({
+      tradeId: pos.tradeId,
+      tokenId: pos.tokenId,
+      marketId: pos.marketId,
+      minPriceDuringPosition: pos.minBid,
+      stopLossPrice: pos.entryPrice - getConfig().strategy.stopLossDelta,
+    }));
+  }
+
   /** Total cost basis of all open positions (sum of actualCost), not mark-to-market. */
   computeOpenPositionsValue(): number {
     let total = 0;
@@ -353,18 +372,9 @@ export class MarketOrchestrator extends EventEmitter {
       }
     });
 
-    const handlePriceEvent = (ev: {
-      tokenId: string;
-      bestBid: string;
-      bestAsk: string;
-    }) =>
-      this.onTokenPriceUpdate(
-        ev.tokenId,
-        parseFloat(ev.bestBid),
-        parseFloat(ev.bestAsk),
-      );
-    this.wsWatcher.on("priceUpdate", handlePriceEvent);
-    this.wsWatcher.on("bestBidAskUpdate", handlePriceEvent);
+    this.wsWatcher.on("bookUpdate", (ev: BookUpdateEvent) =>
+      this.onBookUpdate(ev),
+    );
 
     this.wsWatcher.on("marketResolved", (ev: MarketResolvedEvent) =>
       this.onMarketResolved(ev),
@@ -531,35 +541,50 @@ export class MarketOrchestrator extends EventEmitter {
     );
   }
 
-  private onTokenPriceUpdate(
-    tokenId: string,
-    bestBid: number,
-    bestAsk: number,
-  ): void {
+  /** Executable state changed: refresh prices, re-evaluate entry, check stops. */
+  private onBookUpdate({ tokenId, bestBid, bestAsk }: BookUpdateEvent): void {
+    if (bestBid === null || bestAsk === null) return; // one-sided book: not executable
+
     const marketId = this.tokenToMarket.get(tokenId);
     if (marketId) {
       const state = this.activeMarkets.get(marketId);
-      if (state && state.endDate > new Date()) {
-        state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
+      if (state) {
+        // Track while the window is live; afterwards freeze until settlement,
+        // but still seed once so a restart mid-window isn't left blank.
+        const live = state.endDate > new Date();
+        if (live || state.lastPrices[tokenId] === undefined) {
+          state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
+        }
       }
-      // After the window ends, freeze prices until the trade settles.
     }
 
     const config = getConfig();
-    const sigmaPerSec = this.btcWatcher.getRealizedVol(
-      config.strategy.sigmaWindowMs,
-    );
-
     this.strategyEngine.evaluatePrice(
       tokenId,
       bestBid,
       bestAsk,
       this.btcWatcher.getCurrentPrice(),
-      sigmaPerSec,
+      this.btcWatcher.getRealizedVol(config.strategy.sigmaWindowMs),
     );
 
+    this.trackMinBid(tokenId, bestBid);
     this.checkStopLoss(tokenId, bestBid);
   }
+
+  /** Lowest executable bid seen while a position is open (observational only). */
+  private trackMinBid(tokenId: string, bestBid: number): void {
+    const tradeIds = this.positionsByToken.get(tokenId);
+    if (!tradeIds) return;
+    for (const tradeId of tradeIds) {
+      const pos = this.openPositions.get(tradeId);
+      if (!pos || bestBid >= pos.minBid) continue;
+      pos.minBid = bestBid;
+      updateTradeMinPrice(tradeId, bestBid.toFixed(6)).catch((err) =>
+        logger.debug({ err, tradeId }, "Failed to persist min price"),
+      );
+    }
+  }
+
   private checkStopLoss(tokenId: string, bestBid: number): void {
     const config = getConfig();
     if (!config.strategy.stopLossEnabled) return;
@@ -584,9 +609,9 @@ export class MarketOrchestrator extends EventEmitter {
             4,
           ),
         },
-        "Stop-loss breached — exiting at market",
+        "Stop-loss breached — submitting market exit",
       );
-      this.executeStopLoss(tradeId, pos).catch((err) => {
+      this.submitStopLossExit(tradeId, pos, bestBid).catch((err) => {
         logger.error({ err, tradeId }, "Stop-loss exit failed");
         const p = this.openPositions.get(tradeId);
         if (p) p.stopTriggered = false;
@@ -645,22 +670,16 @@ export class MarketOrchestrator extends EventEmitter {
     const config = getConfig();
 
     try {
-      const orderbookResult = await this.client.getOrderbook(opp.tokenId);
-      if (!orderbookResult?.data || !orderbookResult.data.asks?.length) {
+      const orderbook = this.wsWatcher.getBook(opp.tokenId);
+      if (!orderbook || orderbook.asks.length === 0) {
         logger.warn(
           { tokenId: opp.tokenId },
-          "No orderbook available — will retry on next price update",
+          "No executable asks — will retry on next book update",
         );
         this.strategyEngine.clearEvaluated(opp.tokenId);
         return;
       }
-      const orderbook = orderbookResult.data;
-
-      const sortedAsks = [...orderbook.asks].sort(
-        (a, b) => parseFloat(a.price) - parseFloat(b.price),
-      );
-      const bestAskPrice =
-        sortedAsks.length > 0 ? parseFloat(sortedAsks[0]!.price) : opp.bestAsk;
+      const bestAskPrice = this.wsWatcher.getBestAsk(opp.tokenId) ?? opp.bestAsk;
 
       const openPositionsValue = this.computeOpenPositionsValue();
       const positionBudget =
@@ -788,6 +807,7 @@ export class MarketOrchestrator extends EventEmitter {
         fees: execution.fees,
         actualCost,
         marketEndDate: market?.endDate ?? new Date(),
+        minBid: this.wsWatcher.getBestBid(opp.tokenId) ?? execution.averagePrice,
       });
 
       this.scheduleSettlementWatch(opp.marketId);
@@ -857,30 +877,52 @@ export class MarketOrchestrator extends EventEmitter {
     }
   }
 
-  private async executeStopLoss(
+  /**
+   * Mirrors a real engine: the order is submitted the moment the trigger is seen,
+   * then matched against the book as it stands when the order lands — the book
+   * keeps moving during the round-trip, so the fill is not the trigger price.
+   */
+  private async submitStopLossExit(
     tradeId: string,
     pos: OpenPosition,
+    triggerBid: number,
   ): Promise<void> {
     try {
-      const book = (await this.client.getOrderbook(pos.tokenId))?.data;
-      const fallbackBid =
-        this.strategyEngine.getPriceState(pos.tokenId)?.bestBid ?? 0;
-      let exitPrice = fallbackBid;
-      let exitFees = 0;
+      const config = getConfig();
+      await sleep(config.strategy.executionLatencyMs);
 
-      if (book && book.bids?.length > 0) {
-        const sell = simulateLimitSell(book, pos.entryShares, 0);
-        if (sell.totalSharesSold > 0) {
-          exitPrice = sell.averagePrice;
-          exitFees = sell.fees;
-        }
-        if (sell.isPartialFill) {
-          logger.warn(
-            { tradeId, sold: sell.totalSharesSold, total: pos.entryShares },
-            "Stop-loss partial fill — insufficient bid liquidity",
-          );
-        }
+      const book = this.wsWatcher.getBook(pos.tokenId);
+      if (!book || book.bids.length === 0) {
+        // Nothing to match against: keep the position and re-arm the trigger.
+        logger.warn({ tradeId }, "Stop-loss unfilled — no executable bids");
+        pos.stopTriggered = false;
+        return;
       }
+
+      const sell = simulateLimitSell(book, pos.entryShares, 0);
+      if (sell.totalSharesSold <= 0) {
+        logger.warn({ tradeId }, "Stop-loss unfilled — no matching liquidity");
+        pos.stopTriggered = false;
+        return;
+      }
+      if (sell.isPartialFill) {
+        logger.warn(
+          { tradeId, sold: sell.totalSharesSold, total: pos.entryShares },
+          "Stop-loss partial fill — insufficient bid liquidity",
+        );
+      }
+      const exitPrice = sell.averagePrice;
+      const exitFees = sell.fees;
+      logger.debug(
+        {
+          tradeId,
+          triggerBid: triggerBid.toFixed(4),
+          fill: exitPrice.toFixed(4),
+          slippage: (triggerBid - exitPrice).toFixed(4),
+          latencyMs: config.strategy.executionLatencyMs,
+        },
+        "Stop-loss order matched",
+      );
 
       const pnl = calculateEarlyExitPnl(
         pos.entryPrice,
@@ -1144,6 +1186,9 @@ export class MarketOrchestrator extends EventEmitter {
         fees: parseFloat(trade.entryFees ?? "0"),
         actualCost: parseFloat(trade.actualCost ?? "0"),
         marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
+        minBid: parseFloat(
+          trade.minPriceDuringPosition ?? trade.entryPrice,
+        ),
       });
 
       if (trade.marketId) this.scheduleSettlementWatch(trade.marketId);
@@ -1243,15 +1288,6 @@ export class MarketOrchestrator extends EventEmitter {
       this.wsWatcher.subscribe(tokenIds);
       state.subscribedWs = true;
 
-      if (endDate.getTime() < Date.now() && hasOpenPositions) {
-        this.seedLastPricesForEndedMarket(state).catch((err) =>
-          logger.debug(
-            { err, marketId: row.id },
-            "Could not seed prices for ended market — will show pending",
-          ),
-        );
-      }
-
       logger.info(
         {
           marketId: row.id,
@@ -1269,30 +1305,6 @@ export class MarketOrchestrator extends EventEmitter {
         "Loaded existing active markets from database",
       );
     }
-  }
-
-  private async seedLastPricesForEndedMarket(
-    state: ActiveMarketState,
-  ): Promise<void> {
-    const tokenIds = [state.yesTokenId, state.noTokenId];
-
-    await Promise.all(
-      tokenIds.map(async (tokenId) => {
-        try {
-          const book = (await this.client.getOrderbook(tokenId))?.data;
-          if (!book) return;
-          const bid = book.bids.length
-            ? Math.max(...book.bids.map((l) => parseFloat(l.price)))
-            : 0;
-          const ask = book.asks.length
-            ? Math.min(...book.asks.map((l) => parseFloat(l.price)))
-            : 1;
-          state.lastPrices[tokenId] = { bid, ask };
-        } catch {
-          // Non-fatal: an unquotable expired token just leaves no price.
-        }
-      }),
-    );
   }
 
   /** Raw GammaMarkets for active markets, for API merging. */

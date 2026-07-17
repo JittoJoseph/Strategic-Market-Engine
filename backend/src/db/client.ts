@@ -138,6 +138,14 @@ export async function createSimulatedTrade(data: {
   return result[0];
 }
 
+export async function updateTradeMinPrice(id: string, minPrice: string) {
+  const database = getDb();
+  await database
+    .update(schema.simulatedTrades)
+    .set({ minPriceDuringPosition: minPrice, updatedAt: new Date() })
+    .where(eq(schema.simulatedTrades.id, id));
+}
+
 export async function resolveTrade(
   id: string,
   outcome: "WIN" | "LOSS",

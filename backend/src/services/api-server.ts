@@ -42,6 +42,9 @@ export class ApiServer {
     this.wss.on("connection", (ws) => {
       logger.debug("Frontend WS client connected");
 
+      // Hand over the current state at once so the stream never starts empty.
+      ws.send(JSON.stringify({ type: "liveState", data: buildLiveState() }));
+
       // Reply to app-level ping so the frontend can confirm end-to-end connectivity.
       ws.on("message", (raw) => {
         try {
@@ -57,7 +60,10 @@ export class ApiServer {
       ws.on("close", () => logger.debug("Frontend WS client disconnected"));
     });
 
-    this.broadcastInterval = setInterval(() => this.broadcastState(), 2000);
+    this.broadcastInterval = setInterval(
+      () => this.broadcast({ type: "liveState", data: buildLiveState() }),
+      1000,
+    );
 
     const orchestrator = getMarketOrchestrator();
     orchestrator.on("tradeOpened", (data) =>
@@ -66,14 +72,6 @@ export class ApiServer {
     orchestrator.on("tradeResolved", (data) =>
       this.broadcast({ type: "tradeResolved", data }),
     );
-
-    // Carry sigmaPerSec on each BTC tick so the frontend updates it in real time.
-    const btcWatcher = getBtcPriceWatcher();
-    btcWatcher.on("btcPriceUpdate", (data) => {
-      const config = getConfig();
-      const sigmaPerSec = btcWatcher.getRealizedVol(config.strategy.sigmaWindowMs);
-      this.broadcast({ type: "btcPriceUpdate", data: { ...data, sigmaPerSec } });
-    });
 
     return new Promise((resolve) => {
       this.server!.listen(config.server.port, config.server.host, () => {
@@ -143,60 +141,14 @@ export class ApiServer {
       });
     });
 
-    this.app.get(["/api/system/stats", "/api/stats"], async (_req, res) => {
+    // Same model the WebSocket streams, so the first render is already complete.
+    this.app.get(["/api/live-state", "/api/system/stats"], (_req, res) => {
       try {
-        const orchestrator = getMarketOrchestrator();
-        const btcWatcher = getBtcPriceWatcher();
-        const config = getConfig();
-
-        res.json({
-          orchestrator: orchestrator.getStats(),
-          btcPrice: btcWatcher.getCurrentPrice(),
-          config: {
-            marketWindow: config.strategy.marketWindow,
-            zEntryThreshold: config.strategy.zEntryThreshold,
-            entryPriceFloor: config.strategy.entryPriceFloor,
-            maxEntryPrice: config.strategy.maxEntryPrice,
-            entryFromWindowSeconds: config.strategy.entryFromWindowSeconds,
-            sigmaWindowMs: config.strategy.sigmaWindowMs,
-            minEntryEdge: config.strategy.minEntryEdge,
-            stopLossEnabled: config.strategy.stopLossEnabled,
-            stopLossDelta: config.strategy.stopLossDelta,
-            startingCapital: config.portfolio.startingCapital,
-            budgetDivisor: config.portfolio.budgetDivisor,
-            budgetMinUsd: config.portfolio.budgetMinUsd,
-            budgetMaxUsd: config.portfolio.budgetMaxUsd,
-            consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
-            riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
-            riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,
-          },
-        });
+        res.json(buildLiveState());
       } catch (error) {
-        logger.error({ error }, "System stats error");
-        res.status(500).json({ error: "Failed to get system stats" });
+        logger.error({ error }, "Live state error");
+        res.status(500).json({ error: "Failed to build live state" });
       }
-    });
-
-    // Primary live market, preferring ACTIVE > ENDED > most-recent UPCOMING.
-    this.app.get("/api/active-market", (_req, res) => {
-      const orchestrator = getMarketOrchestrator();
-      const liveMarkets = orchestrator.getLiveMarkets();
-
-      if (liveMarkets.length === 0) {
-        res.status(204).end();
-        return;
-      }
-
-      liveMarkets.sort(
-        (a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime(),
-      );
-
-      const primary =
-        liveMarkets.find((m) => m.status === "ACTIVE") ??
-        liveMarkets.find((m) => m.status === "ENDED") ??
-        liveMarkets[0];
-
-      res.json(primary);
     });
 
     this.app.get("/api/markets", async (req, res) => {
@@ -470,27 +422,51 @@ export class ApiServer {
     }
   }
 
-  private broadcastState(): void {
-    const orchestrator = getMarketOrchestrator();
-    const btcWatcher = getBtcPriceWatcher();
-    const stats = orchestrator.getStats();
-    const pm = orchestrator.portfolioManager;
-    this.broadcast({
-      type: "systemState",
-      data: {
-        ...stats,
-        liveMarkets: orchestrator.getLiveMarkets(),
-        btcPrice: btcWatcher.getCurrentPrice(),
-        portfolio: {
-          cashBalance: pm.getCashBalance(),
-          initialCapital: pm.getInitialCapital(),
-          openPositionsValue: orchestrator.computeOpenPositionsValue(),
-        },
-        timestamp: Date.now(),
-      },
-    });
-  }
 }
+
+/**
+ * The one live-state model. REST returns it as the initial snapshot and the
+ * WebSocket streams the identical shape, so the client never merges two models.
+ */
+export function buildLiveState() {
+  const orchestrator = getMarketOrchestrator();
+  const btcWatcher = getBtcPriceWatcher();
+  const config = getConfig();
+  const pm = orchestrator.portfolioManager;
+
+  return {
+    orchestrator: orchestrator.getStats(),
+    liveMarkets: orchestrator.getLiveMarkets(),
+    openPositions: orchestrator.getOpenPositionSnapshots(),
+    btcPrice: btcWatcher.getCurrentPrice(),
+    portfolio: {
+      cashBalance: pm.getCashBalance(),
+      initialCapital: pm.getInitialCapital(),
+      openPositionsValue: orchestrator.computeOpenPositionsValue(),
+    },
+    config: {
+      marketWindow: config.strategy.marketWindow,
+      zEntryThreshold: config.strategy.zEntryThreshold,
+      entryPriceFloor: config.strategy.entryPriceFloor,
+      maxEntryPrice: config.strategy.maxEntryPrice,
+      entryFromWindowSeconds: config.strategy.entryFromWindowSeconds,
+      sigmaWindowMs: config.strategy.sigmaWindowMs,
+      minEntryEdge: config.strategy.minEntryEdge,
+      stopLossEnabled: config.strategy.stopLossEnabled,
+      stopLossDelta: config.strategy.stopLossDelta,
+      startingCapital: config.portfolio.startingCapital,
+      budgetDivisor: config.portfolio.budgetDivisor,
+      budgetMinUsd: config.portfolio.budgetMinUsd,
+      budgetMaxUsd: config.portfolio.budgetMaxUsd,
+      consecutiveLossPauseLimit: config.strategy.consecutiveLossPauseLimit,
+      riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
+      riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,
+    },
+    timestamp: Date.now(),
+  };
+}
+
+export type LiveState = ReturnType<typeof buildLiveState>;
 
 let instance: ApiServer | null = null;
 export function getApiServer(): ApiServer {

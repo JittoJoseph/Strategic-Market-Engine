@@ -57,7 +57,6 @@ export const WINDOW_CONFIGS: Record<MarketWindow, WindowConfig> = {
 
 export const POLY_URLS = {
   GAMMA_API_BASE: "https://gamma-api.polymarket.com",
-  CLOB_BASE: "https://clob.polymarket.com",
   CLOB_WS: "wss://ws-subscriptions-clob.polymarket.com/ws/market",
   RTDS_WS: "wss://ws-live-data.polymarket.com",
 } as const;
@@ -93,6 +92,8 @@ export const ConfigSchema = z.object({
     stopLossEnabled: z.boolean(),
     stopLossDelta: z.number().min(0).max(1),
     scanIntervalMs: z.number().min(10000),
+    /** Simulated submit→match round-trip; the book keeps moving in between. */
+    executionLatencyMs: z.number().min(0).max(5000),
     consecutiveLossPauseLimit: z.number().min(0).max(20),
     riskAutoResumeEnabled: z.boolean(),
     riskAutoResumeCooldownMs: z
@@ -174,25 +175,15 @@ export const GammaEventSchema = z.object({
 });
 export type GammaEvent = z.infer<typeof GammaEventSchema>;
 
-export const OrderbookLevelSchema = z.object({
-  price: z.string(),
-  size: z.string(),
-});
+export interface BookLevel {
+  price: string;
+  size: string;
+}
 
-export const OrderbookSchema = z.object({
-  market: z.string(),
-  asset_id: z.string(),
-  timestamp: z.string(),
-  hash: z.string(),
-  bids: z.array(OrderbookLevelSchema),
-  asks: z.array(OrderbookLevelSchema),
-  min_order_size: z.string().optional(),
-  tick_size: z.string(),
-  neg_risk: z.boolean(),
-});
-
-export type Orderbook = z.infer<typeof OrderbookSchema>;
-export type OrderbookLevel = z.infer<typeof OrderbookLevelSchema>;
+export interface ExecutableBook {
+  bids: BookLevel[];
+  asks: BookLevel[];
+}
 
 export interface ApiResponse<T> {
   success: boolean;

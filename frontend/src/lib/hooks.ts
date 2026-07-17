@@ -5,7 +5,7 @@ import { getApiClient, getWsClient } from "./api-client";
 import { formatPnl } from "./utils";
 import type {
   SimulatedTrade,
-  SystemStats,
+  LiveState,
   LiveMarketInfo,
   DiscoveredMarket,
   PerformanceMetrics,
@@ -109,63 +109,19 @@ export function useTrades(status?: string) {
   };
 }
 
-export function useLiveMarkets(): LiveMarketInfo[] {
-  const [liveMarkets, setLiveMarkets] = useState<LiveMarketInfo[]>([]);
-
-  // Seed from REST so the top section renders before the first WS broadcast
-  useEffect(() => {
-    let cancelled = false;
-    getApiClient()
-      .getActiveMarket()
-      .then((market) => {
-        if (!cancelled && market) {
-          setLiveMarkets((prev) => (prev.length === 0 ? [market] : prev));
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const ws = getWsClient();
-    ws.connect();
-
-    const unsub = ws.on("systemState", (msg: WsMessage) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const incoming = (msg.data as any)?.liveMarkets as
-        | LiveMarketInfo[]
-        | undefined;
-      if (!incoming) return;
-      setLiveMarkets((prev) =>
-        incoming.map((m) => {
-          // Preserve last-known prices while a just-registered market has none
-          if (Object.keys(m.prices).length === 0) {
-            const existing = prev.find((p) => p.marketId === m.marketId);
-            return existing ? { ...m, prices: existing.prices } : m;
-          }
-          return m;
-        }),
-      );
-    });
-
-    return unsub;
-  }, []);
-
-  return liveMarkets;
-}
-
-export function useSystemStats() {
-  const [stats, setStats] = useState<SystemStats | null>(null);
+/**
+ * The single live-state hook. The REST snapshot and every WebSocket frame carry
+ * the same model, so the stream just replaces state — there is no initial/live
+ * split and no merging, hence no visible jump on the handover.
+ */
+export function useLiveState() {
+  const [state, setState] = useState<LiveState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const fetchStats = useCallback(async () => {
+  const refetch = useCallback(async () => {
     try {
-      const api = getApiClient();
-      const response = await api.getSystemStats();
-      setStats(response);
+      setState(await getApiClient().getLiveState());
       setError(null);
     } catch (err) {
       setError(err as Error);
@@ -175,10 +131,20 @@ export function useSystemStats() {
   }, []);
 
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
+    refetch();
+  }, [refetch]);
 
-  return { stats, loading, error, refetch: fetchStats };
+  useEffect(() => {
+    const ws = getWsClient();
+    ws.connect();
+    return ws.on("liveState", (msg: WsMessage) => {
+      if (!msg.data) return;
+      setState(msg.data as LiveState);
+      setLoading(false);
+    });
+  }, []);
+
+  return { state, loading, error, refetch };
 }
 
 export function useActiveMarkets() {
@@ -495,18 +461,6 @@ export function useWsConnection() {
   }, []);
 
   return isConnected;
-}
-
-export function useWsEvent(
-  eventType: string,
-  callback: (message: WsMessage) => void,
-) {
-  useEffect(() => {
-    const ws = getWsClient();
-    ws.connect();
-    const unsubscribe = ws.on(eventType, callback);
-    return unsubscribe;
-  }, [eventType, callback]);
 }
 
 export function useCountdown(endDate: string | null) {

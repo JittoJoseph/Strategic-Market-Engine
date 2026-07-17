@@ -1,14 +1,15 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { createModuleLogger } from "../utils/logger.js";
-import { POLY_URLS } from "../types/index.js";
+import {
+  POLY_URLS,
+  type BookLevel,
+  type ExecutableBook,
+} from "../types/index.js";
 import type {
   ClobWsMessage,
-  PriceUpdateEvent,
-  OrderbookUpdateEvent,
-  BestBidAskEvent,
+  BookUpdateEvent,
   MarketResolvedEvent,
-  TickSizeChangeEvent,
   MarketSubscriptionMessage,
   SubscriptionUpdateMessage,
 } from "../interfaces/websocket-types.js";
@@ -16,14 +17,17 @@ import { logAudit } from "../db/client.js";
 
 const logger = createModuleLogger("market-ws-watcher");
 
-/**
- * Real-time market data via Polymarket CLOB WebSocket. Subscribes with
- * `custom_feature_enabled=true`, required to receive the best_bid_ask and
- * market_resolved event types.
- */
+/** Price → aggregated size, per side. */
+interface MaintainedBook {
+  bids: Map<number, number>;
+  asks: Map<number, number>;
+  timestamp: number;
+}
+
 export class MarketWebSocketWatcher extends EventEmitter {
   private ws: WebSocket | null = null;
   private subscribedTokens: Set<string> = new Set();
+  private books: Map<string, MaintainedBook> = new Map();
   private running = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +80,10 @@ export class MarketWebSocketWatcher extends EventEmitter {
   }
 
   unsubscribe(tokenIds: string[]): void {
-    tokenIds.forEach((id) => this.subscribedTokens.delete(id));
+    tokenIds.forEach((id) => {
+      this.subscribedTokens.delete(id);
+      this.books.delete(id);
+    });
 
     if (this.ws?.readyState === WebSocket.OPEN) {
       const msg: SubscriptionUpdateMessage = {
@@ -91,13 +98,47 @@ export class MarketWebSocketWatcher extends EventEmitter {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /** Executable depth for a token, or null if no snapshot has arrived yet. */
+  getBook(tokenId: string): ExecutableBook | null {
+    const book = this.books.get(tokenId);
+    if (!book) return null;
+    const levels = (m: Map<number, number>, desc: boolean): BookLevel[] =>
+      Array.from(m.entries())
+        .filter(([, size]) => size > 0)
+        .sort((a, b) => (desc ? b[0] - a[0] : a[0] - b[0]))
+        .map(([price, size]) => ({ price: String(price), size: String(size) }));
+    return { bids: levels(book.bids, true), asks: levels(book.asks, false) };
+  }
+
+  getBestBid(tokenId: string): number | null {
+    return this.bestOf(this.books.get(tokenId)?.bids, true);
+  }
+
+  getBestAsk(tokenId: string): number | null {
+    return this.bestOf(this.books.get(tokenId)?.asks, false);
+  }
+
   getStats() {
     return {
       connected: this.isConnected(),
       subscribedTokens: this.subscribedTokens.size,
+      maintainedBooks: this.books.size,
       messageCount: this.messageCount,
       reconnectAttempts: this.reconnectAttempt,
     };
+  }
+
+  private bestOf(
+    m: Map<number, number> | undefined,
+    max: boolean,
+  ): number | null {
+    if (!m) return null;
+    let best: number | null = null;
+    for (const [price, size] of m) {
+      if (size <= 0) continue;
+      if (best === null || (max ? price > best : price < best)) best = price;
+    }
+    return best;
   }
 
   private connect(): void {
@@ -183,57 +224,31 @@ export class MarketWebSocketWatcher extends EventEmitter {
     switch (msg.event_type) {
       case "book":
         if (msg.asset_id && msg.bids && msg.asks) {
-          this.emit("orderbookUpdate", {
-            tokenId: msg.asset_id,
-            bids: msg.bids,
-            asks: msg.asks,
-            hash: msg.hash ?? "",
+          this.books.set(msg.asset_id, {
+            bids: toLevelMap(msg.bids),
+            asks: toLevelMap(msg.asks),
             timestamp: ts,
-          } satisfies OrderbookUpdateEvent);
+          });
+          this.emitBookUpdate(msg.asset_id, ts);
         }
         break;
 
       case "price_change":
         if (msg.price_changes) {
+          const touched = new Set<string>();
           for (const pc of msg.price_changes) {
-            this.emit("priceUpdate", {
-              tokenId: pc.asset_id,
-              bestBid: pc.best_bid,
-              bestAsk: pc.best_ask,
-              timestamp: ts,
-            } satisfies PriceUpdateEvent);
+            const book = this.books.get(pc.asset_id);
+            if (!book) continue; // no snapshot yet; the next `book` resyncs us
+            const side = pc.side === "BUY" ? book.bids : book.asks;
+            const price = parseFloat(pc.price);
+            const size = parseFloat(pc.size);
+            if (!Number.isFinite(price) || !Number.isFinite(size)) continue;
+            if (size > 0) side.set(price, size);
+            else side.delete(price);
+            book.timestamp = ts;
+            touched.add(pc.asset_id);
           }
-        }
-        break;
-
-      case "best_bid_ask":
-        if (msg.asset_id && msg.best_bid && msg.best_ask) {
-          this.emit("bestBidAskUpdate", {
-            tokenId: msg.asset_id,
-            bestBid: msg.best_bid,
-            bestAsk: msg.best_ask,
-            spread: msg.spread ?? "0",
-            timestamp: ts,
-          } satisfies BestBidAskEvent);
-        }
-        break;
-
-      case "tick_size_change":
-        if (msg.asset_id && msg.old_tick_size && msg.new_tick_size) {
-          logger.debug(
-            {
-              tokenId: msg.asset_id,
-              old: msg.old_tick_size,
-              new: msg.new_tick_size,
-            },
-            "Tick size changed — price near extremes",
-          );
-          this.emit("tickSizeChange", {
-            tokenId: msg.asset_id,
-            oldTickSize: msg.old_tick_size,
-            newTickSize: msg.new_tick_size,
-            timestamp: ts,
-          } satisfies TickSizeChangeEvent);
+          for (const tokenId of touched) this.emitBookUpdate(tokenId, ts);
         }
         break;
 
@@ -259,11 +274,25 @@ export class MarketWebSocketWatcher extends EventEmitter {
     }
   }
 
+  /** Announce new executable state; best bid/ask always derive from the book. */
+  private emitBookUpdate(tokenId: string, timestamp: number): void {
+    const bestBid = this.getBestBid(tokenId);
+    const bestAsk = this.getBestAsk(tokenId);
+    this.emit("bookUpdate", {
+      tokenId,
+      bestBid,
+      bestAsk,
+      timestamp,
+    } satisfies BookUpdateEvent);
+  }
+
   private cleanup(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+    // A reconnect replays fresh snapshots; stale depth must never be executable.
+    this.books.clear();
   }
 
   private scheduleReconnect(): void {
@@ -283,6 +312,18 @@ export class MarketWebSocketWatcher extends EventEmitter {
     );
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
+}
+
+function toLevelMap(levels: BookLevel[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const l of levels) {
+    const price = parseFloat(l.price);
+    const size = parseFloat(l.size);
+    if (Number.isFinite(price) && Number.isFinite(size) && size > 0) {
+      m.set(price, size);
+    }
+  }
+  return m;
 }
 
 let instance: MarketWebSocketWatcher | null = null;

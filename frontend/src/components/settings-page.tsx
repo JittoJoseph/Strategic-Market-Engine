@@ -5,12 +5,12 @@ import { Header } from "./header";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { X, AlertTriangle } from "lucide-react";
 import { getApiClient } from "@/lib/api-client";
-import { useSystemStats } from "@/lib/hooks";
+import { useLiveState } from "@/lib/hooks";
 
 type AdminAction = "pause" | "resume" | "wipe" | null;
 
 export function SettingsPage() {
-  const { refetch: refetchStats } = useSystemStats();
+  const { refetch: refetchStats } = useLiveState();
   const [activeAction, setActiveAction] = useState<AdminAction>(null);
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);

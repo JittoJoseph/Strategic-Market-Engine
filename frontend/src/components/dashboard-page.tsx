@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Header } from "./header";
 import { SystemStatusIndicator } from "./system-status-indicator";
 import { TradesTable } from "./trades-table";
@@ -13,11 +13,9 @@ import { ExternalLink } from "lucide-react";
 import { pnlColor } from "@/lib/utils";
 import {
   useTrades,
-  useSystemStats,
+  useLiveState,
   useActiveMarkets,
   useWsConnection,
-  useWsEvent,
-  useLiveMarkets,
   useCountdown,
   usePerformanceRealtime,
   useActivityLog,
@@ -26,7 +24,7 @@ import {
 import type {
   SimulatedTrade,
   DiscoveredMarket,
-  SystemStats,
+  LiveState,
   LiveMarketInfo,
   LiveMarketPrice,
 } from "@/lib/types";
@@ -45,12 +43,6 @@ export function DashboardPage() {
   const [selectedMarket, setSelectedMarket] = useState<DiscoveredMarket | null>(
     null,
   );
-  const [btcPrice, setBtcPrice] = useState<{
-    price: number;
-    timestamp: number;
-  } | null>(null);
-  const [sigmaPerSec, setSigmaPerSec] = useState<number | null>(null);
-
   const {
     trades,
     loading: tradesLoading,
@@ -58,7 +50,7 @@ export function DashboardPage() {
     hasMore,
     loadingMore,
   } = useTrades();
-  const { stats, loading: statsLoading } = useSystemStats();
+  const { state: stats, loading: statsLoading } = useLiveState();
   const {
     markets,
     loading: marketsLoading,
@@ -68,35 +60,11 @@ export function DashboardPage() {
     loadMore: loadMoreMarkets,
   } = useActiveMarkets();
   const { activities, loading: activitiesLoading } = useActivityLog();
-
-  const liveMarkets = useLiveMarkets();
   useWsConnection();
 
-  useWsEvent(
-    "btcPriceUpdate",
-    useCallback((msg: any) => {
-      const d = msg?.data;
-      if (d?.price && typeof d.price === "number") {
-        setBtcPrice({ price: d.price, timestamp: d.timestamp ?? Date.now() });
-      }
-      if (typeof d?.sigmaPerSec === "number") {
-        setSigmaPerSec(d.sigmaPerSec);
-      }
-    }, []),
-  );
-
-  useWsEvent(
-    "systemState",
-    useCallback((msg: any) => {
-      const d = msg?.data;
-      if (d?.btcPrice && typeof d.btcPrice === "object") {
-        setBtcPrice(d.btcPrice);
-      }
-      if (typeof d?.sigmaPerSec === "number") {
-        setSigmaPerSec(d.sigmaPerSec);
-      }
-    }, []),
-  );
+  const liveMarkets = stats?.liveMarkets ?? [];
+  const btcPrice = stats?.btcPrice ?? null;
+  const sigmaPerSec = stats?.orchestrator.sigmaPerSec ?? null;
 
   const primaryMarket = useMemo(() => {
     const byEnd = (a: { endDate: string }, b: { endDate: string }) =>
@@ -160,8 +128,6 @@ export function DashboardPage() {
       stats.config.marketWindow)
     : "BTC WINDOW";
 
-  const currentBtcPrice = btcPrice ?? stats?.btcPrice ?? null;
-
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <Header />
@@ -169,7 +135,7 @@ export function DashboardPage() {
       <main className="flex-1 px-4 py-4 pb-16 max-w-7xl mx-auto w-full space-y-4">
         <TopDashboardSection
           stats={stats}
-          btcPrice={currentBtcPrice}
+          btcPrice={btcPrice}
           primaryMarket={primaryMarket}
           positionMarkets={positionMarkets}
           activeMarketsCount={
@@ -427,7 +393,7 @@ function TopDashboardSection({
   trades,
   liveMarkets,
 }: {
-  stats: SystemStats | null;
+  stats: LiveState | null;
   btcPrice: { price: number; timestamp: number } | null;
   primaryMarket: LiveMarketInfo | null;
   positionMarkets: LiveMarketInfo[];

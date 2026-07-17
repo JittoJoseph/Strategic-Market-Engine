@@ -37,18 +37,10 @@ export interface ClobWsMessage {
   [key: string]: unknown;
 }
 
-export interface PriceUpdateEvent {
+export interface BookUpdateEvent {
   tokenId: string;
-  bestBid: string;
-  bestAsk: string;
-  timestamp: number;
-}
-
-export interface BestBidAskEvent {
-  tokenId: string;
-  bestBid: string;
-  bestAsk: string;
-  spread: string;
+  bestBid: number | null;
+  bestAsk: number | null;
   timestamp: number;
 }
 
@@ -57,21 +49,6 @@ export interface MarketResolvedEvent {
   conditionId: string;
   winningAssetId: string;
   winningOutcome: string;
-  timestamp: number;
-}
-
-export interface OrderbookUpdateEvent {
-  tokenId: string;
-  bids: Array<{ price: string; size: string }>;
-  asks: Array<{ price: string; size: string }>;
-  hash: string;
-  timestamp: number;
-}
-
-export interface TickSizeChangeEvent {
-  tokenId: string;
-  oldTickSize: string;
-  newTickSize: string;
   timestamp: number;
 }
 

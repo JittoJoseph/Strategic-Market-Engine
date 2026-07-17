@@ -33,6 +33,7 @@ vi.mock("../utils/config.js", () => ({
       minEntryEdge: 0,
       stopLossEnabled: true,
       stopLossDelta: 0.05,
+      executionLatencyMs: 0,
       scanIntervalMs: 30000,
     },
     portfolio: { startingCapital: 100 },

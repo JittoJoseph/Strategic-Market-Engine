@@ -26,23 +26,13 @@ import {
   type ExecutionResult,
   type SellExecutionResult,
 } from "../services/execution-simulator.js";
-import type { Orderbook } from "../types/index.js";
+import { POLYMARKET_MIN_ORDER_SIZE, type ExecutableBook } from "../types/index.js";
 
 function makeOrderbook(
   asks: Array<{ price: string; size: string }>,
   bids: Array<{ price: string; size: string }>,
-  tickSize = "0.01",
-): Orderbook {
-  return {
-    market: "0xtest",
-    asset_id: "test-token-id",
-    timestamp: String(Date.now()),
-    hash: "0xhash",
-    bids,
-    asks,
-    tick_size: tickSize,
-    neg_risk: false,
-  };
+): ExecutableBook {
+  return { bids, asks };
 }
 
 describe("simulateLimitBuy", () => {
@@ -143,44 +133,23 @@ describe("simulateLimitBuy", () => {
     expect(result.totalShares).toBeCloseTo(0.5, 1);
   });
 
-  it("belowMinimumOrderSize is true when filled < min_order_size", () => {
-    // min_order_size defaults to 5 when not set
+  it("belowMinimumOrderSize is true when filled < the protocol minimum", () => {
     const orderbook = makeOrderbook([{ price: "0.95", size: "3" }], []);
 
     const result = simulateLimitBuy(orderbook, 10, 0.95);
 
     expect(result.totalShares).toBe(3);
     expect(result.belowMinimumOrderSize).toBe(true);
-    expect(result.minOrderSize).toBe(5);
+    expect(result.minOrderSize).toBe(POLYMARKET_MIN_ORDER_SIZE);
   });
 
-  it("belowMinimumOrderSize is false when filled >= min_order_size", () => {
+  it("belowMinimumOrderSize is false when filled >= the protocol minimum", () => {
     const orderbook = makeOrderbook([{ price: "0.95", size: "100" }], []);
 
     const result = simulateLimitBuy(orderbook, 10, 0.95);
 
-    expect(result.totalShares).toBeGreaterThanOrEqual(5);
+    expect(result.totalShares).toBeGreaterThanOrEqual(POLYMARKET_MIN_ORDER_SIZE);
     expect(result.belowMinimumOrderSize).toBe(false);
-  });
-
-  it("respects custom min_order_size from orderbook", () => {
-    const orderbook: Orderbook = {
-      market: "0xtest",
-      asset_id: "test-token-id",
-      timestamp: String(Date.now()),
-      hash: "0xhash",
-      bids: [],
-      asks: [{ price: "0.95", size: "8" }],
-      min_order_size: "10",
-      tick_size: "0.01",
-      neg_risk: false,
-    };
-
-    const result = simulateLimitBuy(orderbook, 10, 0.95);
-
-    expect(result.totalShares).toBe(8);
-    expect(result.belowMinimumOrderSize).toBe(true);
-    expect(result.minOrderSize).toBe(10);
   });
 
   it("netCost equals totalCost + fees", () => {

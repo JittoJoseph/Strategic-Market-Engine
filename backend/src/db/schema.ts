@@ -82,6 +82,10 @@ export const simulatedTrades = pgTable(
     entryZ: decimal("entry_z", { precision: 10, scale: 4 }),
     entrySigma: decimal("entry_sigma", { precision: 18, scale: 8 }),
     secondsToEnd: decimal("seconds_to_end", { precision: 8, scale: 2 }),
+    minPriceDuringPosition: decimal("min_price_during_position", {
+      precision: 18,
+      scale: 8,
+    }),
     exitPrice: decimal("exit_price", { precision: 18, scale: 8 }),
     exitTs: timestamp("exit_ts"),
     exitOutcome: text("exit_outcome"),
@@ -95,7 +99,10 @@ export const simulatedTrades = pgTable(
     marketIdIdx: index("st_market_id_idx").on(table.marketId),
     statusIdx: index("st_status_idx").on(table.status),
     entryTsIdx: index("st_entry_ts_idx").on(table.entryTs),
-    statusEntryTsIdx: index("st_status_entry_ts_idx").on(table.status, table.entryTs),
+    statusEntryTsIdx: index("st_status_entry_ts_idx").on(
+      table.status,
+      table.entryTs,
+    ),
     uqOpenTradePerToken: uniqueIndex("uq_open_trade_per_market_token")
       .on(table.marketId, table.tokenId)
       .where(sql`status = 'OPEN'`),

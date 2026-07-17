@@ -7,11 +7,8 @@ export type {
 
 export type {
   ClobWsMessage,
-  PriceUpdateEvent,
-  BestBidAskEvent,
+  BookUpdateEvent,
   MarketResolvedEvent,
-  OrderbookUpdateEvent,
-  TickSizeChangeEvent,
   MarketSubscriptionMessage,
   SubscriptionUpdateMessage,
   RTDSMessage,

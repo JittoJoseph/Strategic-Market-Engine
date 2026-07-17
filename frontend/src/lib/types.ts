@@ -24,6 +24,8 @@ export interface SimulatedTrade {
   /** BTC $/sec realized volatility at entry */
   entrySigma: string | null;
   secondsToEnd: string | null;
+  /** Lowest executable best bid observed while the position was open */
+  minPriceDuringPosition: string | null;
   exitPrice: string | null;
   exitTs: string | null;
   exitOutcome: string | null;
@@ -64,7 +66,21 @@ export interface LiveMarketInfo {
   btcPriceAtWindowStart: number | null;
 }
 
-export interface SystemStats {
+/** Live observables for a currently-open position, mirrored from the backend. */
+export interface OpenPositionSnapshot {
+  tradeId: string;
+  tokenId: string;
+  marketId: string;
+  /** Lowest executable best bid seen since entry. */
+  minPriceDuringPosition: number;
+  stopLossPrice: number;
+}
+
+/**
+ * The single live-state model. The REST snapshot and every WebSocket update
+ * carry this exact shape, so there is no separate "initial" state to merge.
+ */
+export interface LiveState {
   orchestrator: {
     running: boolean;
     paused: boolean;
@@ -75,6 +91,7 @@ export interface SystemStats {
     ws: {
       connected: boolean;
       subscribedTokens: number;
+      maintainedBooks: number;
       messageCount: number;
       reconnectAttempts: number;
     };
@@ -89,7 +106,14 @@ export interface SystemStats {
     sigmaPerSec: number | null;
   };
   liveMarkets: LiveMarketInfo[];
+  openPositions: OpenPositionSnapshot[];
   btcPrice: { price: number; timestamp: number } | null;
+  portfolio: {
+    cashBalance: number;
+    initialCapital: number;
+    openPositionsValue: number;
+  };
+  timestamp: number;
   config: {
     marketWindow: string;
     zEntryThreshold: number;
@@ -108,11 +132,6 @@ export interface SystemStats {
     consecutiveLossPauseLimit: number;
     riskAutoResumeEnabled: boolean;
     riskAutoResumeCooldownMs: number;
-  };
-  portfolio?: {
-    cashBalance: number;
-    initialCapital: number;
-    openPositionsValue: number;
   };
 }
 
@@ -253,12 +272,7 @@ export interface HealthResponse {
 }
 
 export interface WsMessage {
-  type:
-    | "systemState"
-    | "tradeOpened"
-    | "tradeResolved"
-    | "btcPriceUpdate"
-    | "pong";
+  type: "liveState" | "tradeOpened" | "tradeResolved" | "pong";
   data?: unknown;
 }
 

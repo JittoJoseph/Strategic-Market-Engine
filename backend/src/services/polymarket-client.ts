@@ -4,9 +4,7 @@ import { withRetry, isRateLimitError } from "../utils/retry.js";
 import {
   POLY_URLS,
   GammaMarketSchema,
-  OrderbookSchema,
   type GammaMarket,
-  type Orderbook,
 } from "../types/index.js";
 import { z } from "zod";
 import { logAudit } from "../db/client.js";
@@ -15,8 +13,6 @@ const logger = createModuleLogger("polymarket-client");
 
 export class PolymarketClient {
   private gammaApi: AxiosInstance;
-  private clobApi: AxiosInstance;
-  private requestCounts = { gammaApi: 0, clobApi: 0, errors429: 0 };
 
   constructor() {
     this.gammaApi = axios.create({
@@ -25,44 +21,19 @@ export class PolymarketClient {
       headers: { Accept: "application/json", "User-Agent": "PenguinX/3.0" },
     });
 
-    this.clobApi = axios.create({
-      baseURL: POLY_URLS.CLOB_BASE,
-      timeout: 30000,
-      headers: { Accept: "application/json", "User-Agent": "PenguinX/3.0" },
-    });
-
-    this.setupInterceptors();
-  }
-
-  private setupInterceptors() {
-    const handleError = (apiName: string) => async (error: AxiosError) => {
-      if (error.response?.status === 429) {
-        this.requestCounts.errors429++;
-        logger.warn(
-          { api: apiName, url: error.config?.url },
-          "Rate limited (429)",
-        );
-        await logAudit("warn", "rate_limit", `Rate limited on ${apiName}`, {
-          url: error.config?.url,
-          retryAfter: error.response.headers["retry-after"],
-        });
-      }
-      throw error;
-    };
-
-    this.gammaApi.interceptors.response.use((r) => {
-      this.requestCounts.gammaApi++;
-      return r;
-    }, handleError("gammaApi"));
-
-    this.clobApi.interceptors.response.use((r) => {
-      this.requestCounts.clobApi++;
-      return r;
-    }, handleError("clobApi"));
-  }
-
-  getRequestCounts() {
-    return { ...this.requestCounts };
+    this.gammaApi.interceptors.response.use(
+      (r) => r,
+      async (error: AxiosError) => {
+        if (error.response?.status === 429) {
+          logger.warn({ url: error.config?.url }, "Rate limited (429)");
+          await logAudit("warn", "rate_limit", "Rate limited on gammaApi", {
+            url: error.config?.url,
+            retryAfter: error.response.headers["retry-after"],
+          });
+        }
+        throw error;
+      },
+    );
   }
 
   /** Fetch markets from Gamma /markets. `slug` may be an array for multi-lookup. */
@@ -133,22 +104,6 @@ export class PolymarketClient {
           const markets = z.array(GammaMarketSchema).parse(fallback.data);
           return markets[0] ?? null;
         }
-      },
-      { maxRetries: 3, retryOn: isRateLimitError },
-    );
-  }
-
-  async getOrderbook(
-    tokenId: string,
-  ): Promise<{ data: Orderbook; raw: unknown }> {
-    return withRetry(
-      async () => {
-        const response = await this.clobApi.get("/book", {
-          params: { token_id: tokenId },
-        });
-        const raw = response.data;
-        const data = OrderbookSchema.parse(raw);
-        return { data, raw };
       },
       { maxRetries: 3, retryOn: isRateLimitError },
     );

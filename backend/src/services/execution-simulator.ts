@@ -1,5 +1,9 @@
 import { createModuleLogger } from "../utils/logger.js";
-import { CRYPTO_FEE, type Orderbook } from "../types/index.js";
+import {
+  CRYPTO_FEE,
+  POLYMARKET_MIN_ORDER_SIZE,
+  type ExecutableBook,
+} from "../types/index.js";
 import Decimal from "decimal.js";
 
 const logger = createModuleLogger("execution-simulator");
@@ -32,7 +36,7 @@ interface FillDetail {
  * (default 5 shares), which Polymarket would reject.
  */
 export function simulateLimitBuy(
-  orderbook: Orderbook,
+  orderbook: ExecutableBook,
   usdAmount: number,
   limitPrice: number,
 ): ExecutionResult {
@@ -86,7 +90,7 @@ export function simulateLimitBuy(
 
   const roundedFees = Math.round(totalFees.toNumber() * 10000) / 10000;
 
-  const minOrderSize = parseFloat(orderbook.min_order_size ?? "5") || 5;
+  const minOrderSize = POLYMARKET_MIN_ORDER_SIZE;
   const belowMinimumOrderSize =
     totalShares.gt(0) && totalShares.lt(minOrderSize);
 
@@ -154,7 +158,7 @@ interface SellFillDetail {
  * only at bids at or above `limitPrice`. Pass `limitPrice` 0 to accept any bid.
  */
 export function simulateLimitSell(
-  orderbook: Orderbook,
+  orderbook: ExecutableBook,
   sharesToSell: number,
   limitPrice: number,
 ): SellExecutionResult {
