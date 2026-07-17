@@ -72,9 +72,10 @@ export function TradeDetailPopup({
       trade.windowType)
     : null;
 
-  const polyUrl = (marketSlug ?? trade.marketSlug)
-    ? `https://polymarket.com/event/${marketSlug ?? trade.marketSlug}`
-    : `https://polymarket.com/market/${trade.marketId}`;
+  const polyUrl =
+    (marketSlug ?? trade.marketSlug)
+      ? `https://polymarket.com/event/${marketSlug ?? trade.marketSlug}`
+      : `https://polymarket.com/market/${trade.marketId}`;
   const question = marketQuestion ?? trade.marketQuestion;
 
   const statusCls = isOpen
@@ -142,7 +143,6 @@ export function TradeDetailPopup({
           )}
         </div>
 
-        {/* Open and closed both lead with P&L; open is marked to the live bid. */}
         <div
           className={`shrink-0 flex items-center justify-between gap-4 px-4 py-2.5 border-b border-border/20 ${
             pnl === null
@@ -154,7 +154,6 @@ export function TradeDetailPopup({
         >
           <div className="flex items-baseline gap-2">
             <Label>{isOpen ? "UNREALIZED P&L" : "P&L"}</Label>
-            {isOpen && <LiveDot />}
             <span
               className={`text-[15px] font-bold tabular-nums tracking-tight leading-none ${pnl === null ? "text-muted-foreground/40" : pnlColor(pnl)}`}
             >
@@ -191,18 +190,15 @@ export function TradeDetailPopup({
             <Cell
               label={isOpen ? "CURRENT BID" : "EXIT"}
               value={cents(isOpen ? liveBid : exitPrice)}
-              live={isOpen}
             />
             <Cell
               label="MIN PRICE"
               hint="Lowest executable bid seen while open"
               value={cents(minPrice)}
-              live={isOpen}
             />
             <Cell
               label="STOP PRICE"
               value={cents(livePos?.stopLossPrice ?? null)}
-              live={isOpen}
             />
             <Cell label="SHARES" value={shares.toFixed(2)} />
             <Cell label="COST" value={usd(cost, 4)} />
@@ -240,7 +236,9 @@ export function TradeDetailPopup({
                 }
               />
             )}
-            {entryZ !== null && <Cell label="Z-SCORE" value={entryZ.toFixed(2)} />}
+            {entryZ !== null && (
+              <Cell label="Z-SCORE" value={entryZ.toFixed(2)} />
+            )}
             {entrySigma !== null && (
               <Cell label="BTC σ" value={`$${entrySigma.toFixed(2)}/s`} />
             )}
@@ -265,21 +263,11 @@ export function TradeDetailPopup({
             <Cell
               label="HELD"
               value={formatDuration(trade.entryTs, trade.exitTs)}
-              live={isOpen}
             />
           </Section>
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function LiveDot() {
-  return (
-    <span
-      className="w-1 h-1 rounded-full bg-blue-400 animate-pulse shrink-0"
-      aria-label="live"
-    />
   );
 }
 
@@ -324,18 +312,15 @@ function Cell({
   label,
   value,
   hint,
-  live,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
-  live?: boolean;
 }) {
   return (
     <div className="px-3 py-2 flex flex-col gap-0.5" title={hint}>
       <span className="flex items-center gap-1 text-[10px] font-mono tracking-[0.15em] text-muted-foreground/40 uppercase">
         {label}
-        {live && <LiveDot />}
       </span>
       <span className="text-[12px] font-mono tabular-nums text-foreground/80 leading-tight">
         {value}
@@ -368,7 +353,8 @@ function formatTs(iso: string): string {
 
 /** Elapsed hold; runs to "now" while the position is still open. */
 function formatDuration(startIso: string, endIso: string | null): string {
-  const ms = (endIso ? new Date(endIso).getTime() : Date.now()) -
+  const ms =
+    (endIso ? new Date(endIso).getTime() : Date.now()) -
     new Date(startIso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "—";
   const s = Math.floor(ms / 1000);
