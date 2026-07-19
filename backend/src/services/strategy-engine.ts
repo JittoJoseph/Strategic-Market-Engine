@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import type { BtcPriceData } from "../interfaces/websocket-types.js";
+import { marketNow } from "./market-clock.js";
 
 const logger = createModuleLogger("strategy-engine");
 
@@ -135,14 +136,14 @@ export class StrategyEngine extends EventEmitter {
     btcPriceData: BtcPriceData | null,
     sigmaPerSec: number | null,
   ): void {
-    this.priceStates.set(tokenId, { bestBid, bestAsk, lastUpdate: Date.now() });
+    this.priceStates.set(tokenId, { bestBid, bestAsk, lastUpdate: marketNow() });
 
     const market = this.watchedMarkets.get(tokenId);
     if (!market) return;
     if (this.evaluatedTokens.has(tokenId)) return;
 
     const config = getConfig();
-    const secondsToEnd = (market.endDate.getTime() - Date.now()) / 1000;
+    const secondsToEnd = (market.endDate.getTime() - marketNow()) / 1000;
 
     // Only trade the final stretch of the window, never after close.
     if (

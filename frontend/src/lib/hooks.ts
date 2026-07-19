@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { getApiClient, getWsClient } from "./api-client";
 import { formatPnl } from "./utils";
+import { marketNow } from "./market-time";
 import type {
   SimulatedTrade,
   LiveState,
@@ -463,10 +464,11 @@ export function useWsConnection() {
   return isConnected;
 }
 
+/** Counts down against market time, so it agrees with Polymarket to the second. */
 export function useCountdown(endDate: string | null) {
   const calcRemaining = useCallback(() => {
     if (!endDate) return null;
-    const diff = new Date(endDate).getTime() - Date.now();
+    const diff = new Date(endDate).getTime() - marketNow();
     if (diff <= 0)
       return { days: 0, hours: 0, minutes: 0, seconds: 0, expired: true };
     const totalSeconds = Math.floor(diff / 1000);
@@ -481,16 +483,11 @@ export function useCountdown(endDate: string | null) {
 
   const [remaining, setRemaining] = useState(calcRemaining);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   useEffect(() => {
-    setRemaining(calcRemaining());
-    timerRef.current = setInterval(() => {
-      setRemaining(calcRemaining());
-    }, 1000);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    const tick = () => setRemaining(calcRemaining());
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
   }, [calcRemaining]);
 
   return remaining;

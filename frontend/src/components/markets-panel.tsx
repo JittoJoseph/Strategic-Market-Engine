@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { marketNow } from "@/lib/market-time";
 import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 
@@ -53,7 +54,7 @@ function getMarketTradeStatus(
 }
 
 function formatTimeAgo(endTime: number): string {
-  const now = Date.now();
+  const now = marketNow();
   const diff = now - endTime;
   if (diff <= 0) return "ACTIVE";
 
@@ -66,7 +67,7 @@ function formatTimeAgo(endTime: number): string {
 }
 
 function formatTimeRemaining(endTime: number): string {
-  const now = Date.now();
+  const now = marketNow();
   const diff = endTime - now;
   if (diff <= 0) return "ENDED";
 
@@ -94,7 +95,7 @@ export function MarketsPanel({
     if (!activeMarket?.endDate) return;
 
     const endTime = new Date(activeMarket.endDate).getTime();
-    const now = Date.now();
+    const now = marketNow();
     const timeUntilEnd = endTime - now;
 
     if (timeUntilEnd > 0) {
@@ -150,7 +151,7 @@ export function MarketsPanel({
             const status: "ACTIVE" | "ENDED" = market.computedStatus
               ? market.computedStatus
               : market.endDate &&
-                  new Date(market.endDate).getTime() > Date.now()
+                  new Date(market.endDate).getTime() > marketNow()
                 ? "ACTIVE"
                 : "ENDED";
 

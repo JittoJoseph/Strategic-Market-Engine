@@ -3,6 +3,7 @@ import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
 import { WINDOW_CONFIGS, type WindowConfig } from "../types/index.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
+import { marketNow } from "./market-clock.js";
 
 const logger = createModuleLogger("market-scanner");
 
@@ -71,7 +72,8 @@ export class MarketScanner extends EventEmitter {
   }
 
   private computeWindowSlugs(windowConfig: WindowConfig): string[] {
-    const nowSeconds = Math.floor(Date.now() / 1000);
+    // Window boundaries are Polymarket's, so they must be derived from its clock.
+    const nowSeconds = Math.floor(marketNow() / 1000);
     const durationSeconds = windowConfig.durationMs / 1000;
     const currentWindowStart =
       Math.floor(nowSeconds / durationSeconds) * durationSeconds;

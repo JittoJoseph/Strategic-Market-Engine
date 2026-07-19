@@ -1,6 +1,7 @@
 "use client";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { marketNow } from "@/lib/market-time";
 import { ExternalLink, X } from "lucide-react";
 import type { DiscoveredMarket, SimulatedTrade } from "@/lib/types";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
@@ -78,7 +79,7 @@ function formatTs(iso: string): string {
 }
 
 function formatTimeRemaining(endTime: number): string {
-  const now = Date.now();
+  const now = marketNow();
   const diff = endTime - now;
   if (diff <= 0) return "ENDED";
 
@@ -88,7 +89,7 @@ function formatTimeRemaining(endTime: number): string {
 }
 
 function formatTimeAgo(endTime: number): string {
-  const now = Date.now();
+  const now = marketNow();
   const diff = now - endTime;
   if (diff <= 0) return "ACTIVE";
 

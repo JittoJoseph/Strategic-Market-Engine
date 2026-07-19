@@ -113,7 +113,6 @@ export interface LiveState {
     initialCapital: number;
     openPositionsValue: number;
   };
-  timestamp: number;
   config: {
     marketWindow: string;
     zEntryThreshold: number;
@@ -133,6 +132,15 @@ export interface LiveState {
     riskAutoResumeEnabled: boolean;
     riskAutoResumeCooldownMs: number;
   };
+  /** Backend's sync to Polymarket's clock; surfaced so drift is observable. */
+  clock: {
+    offsetMs: number;
+    syncedAtMs: number | null;
+    lastRttMs: number | null;
+    synced: boolean;
+  };
+  /** Market time (epoch ms) at send. Clients count down from this, not their own clock. */
+  timestamp: number;
 }
 
 export type ActivityKind =

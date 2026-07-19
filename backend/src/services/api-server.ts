@@ -12,6 +12,7 @@ import * as schema from "../db/schema.js";
 import { eq, desc, and } from "drizzle-orm";
 import { getMarketOrchestrator } from "./market-orchestrator.js";
 import { getBtcPriceWatcher } from "./btc-price-watcher.js";
+import { getMarketClock, marketNow } from "./market-clock.js";
 import {
   calculatePortfolioPerformance,
   type TimePeriod,
@@ -50,7 +51,8 @@ export class ApiServer {
         try {
           const msg = JSON.parse(raw.toString()) as { type?: string };
           if (msg.type === "ping") {
-            ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+            // Market time: the client round-trips this to sync its countdowns.
+            ws.send(JSON.stringify({ type: "pong", ts: marketNow() }));
           }
         } catch {
           /* ignore non-JSON frames */
@@ -462,7 +464,9 @@ export function buildLiveState() {
       riskAutoResumeEnabled: config.strategy.riskAutoResumeEnabled,
       riskAutoResumeCooldownMs: config.strategy.riskAutoResumeCooldownMs,
     },
-    timestamp: Date.now(),
+    clock: getMarketClock().getStatus(),
+    /** Market time. Clients derive their countdowns from this, never their own clock. */
+    timestamp: marketNow(),
   };
 }
 

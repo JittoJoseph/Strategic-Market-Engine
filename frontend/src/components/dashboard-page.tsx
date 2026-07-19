@@ -62,7 +62,11 @@ export function DashboardPage() {
   const { activities, loading: activitiesLoading } = useActivityLog();
   useWsConnection();
 
-  const liveMarkets = stats?.liveMarkets ?? [];
+  // Stable identity: downstream memos key off this list.
+  const liveMarkets = useMemo(
+    () => stats?.liveMarkets ?? [],
+    [stats?.liveMarkets],
+  );
   const btcPrice = stats?.btcPrice ?? null;
   const sigmaPerSec = stats?.orchestrator.sigmaPerSec ?? null;
 

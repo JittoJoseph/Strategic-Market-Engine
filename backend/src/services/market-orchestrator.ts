@@ -31,6 +31,7 @@ import {
   calculateEarlyExitPnl,
 } from "./execution-simulator.js";
 import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
+import { marketNow } from "./market-clock.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { PortfolioManager } from "./portfolio-manager.js";
 
@@ -258,7 +259,7 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   getLiveMarkets() {
-    const now = Date.now();
+    const now = marketNow();
     return Array.from(this.activeMarkets.values())
       .filter((m) => !m.resolved)
       .sort((a, b) => a.endDate.getTime() - b.endDate.getTime())
@@ -400,7 +401,7 @@ export class MarketOrchestrator extends EventEmitter {
   private tryFillBtcWindowStart(): void {
     if (this.pendingBtcFills.size === 0) return;
 
-    const nowMs = Date.now();
+    const nowMs = marketNow();
 
     for (const marketId of this.pendingBtcFills) {
       const state = this.activeMarkets.get(marketId);
@@ -475,7 +476,7 @@ export class MarketOrchestrator extends EventEmitter {
     const endDate = market.endDate ? new Date(market.endDate) : new Date();
 
     // Gamma can return old unresolved markets; skip ones already expired.
-    if (endDate.getTime() < Date.now()) {
+    if (endDate.getTime() < marketNow()) {
       logger.debug(
         { marketId: market.id, endDate: endDate.toISOString() },
         "Skipping expired market",
@@ -486,7 +487,7 @@ export class MarketOrchestrator extends EventEmitter {
     // Pre-fill if the window is already open; else the next BTC tick fills it.
     const windowStartMs = endDate.getTime() - this.windowDurationMs;
     const btcPriceAtWindowStart =
-      windowStartMs <= Date.now()
+      windowStartMs <= marketNow()
         ? (this.btcWatcher.getPriceAt(windowStartMs) ??
           this.btcWatcher.getCurrentPrice()?.price ??
           null)
@@ -551,7 +552,7 @@ export class MarketOrchestrator extends EventEmitter {
       if (state) {
         // Track while the window is live; afterwards freeze until settlement,
         // but still seed once so a restart mid-window isn't left blank.
-        const live = state.endDate > new Date();
+        const live = state.endDate.getTime() > marketNow();
         if (live || state.lastPrices[tokenId] === undefined) {
           state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
         }
@@ -592,7 +593,7 @@ export class MarketOrchestrator extends EventEmitter {
     const tradeIds = this.positionsByToken.get(tokenId);
     if (!tradeIds) return;
 
-    const now = Date.now();
+    const now = marketNow();
     for (const tradeId of tradeIds) {
       const pos = this.openPositions.get(tradeId);
       if (!pos || pos.stopTriggered) continue;
@@ -773,7 +774,7 @@ export class MarketOrchestrator extends EventEmitter {
         });
       }
 
-      const entryTs = new Date();
+      const entryTs = new Date(marketNow());
       const tradeRow = await createSimulatedTrade({
         marketId: opp.marketId,
         tokenId: opp.tokenId,
@@ -1249,7 +1250,7 @@ export class MarketOrchestrator extends EventEmitter {
       const hasOpenPositions = this.hasOpenPositionsForMarket(row.id);
 
       // Drop markets that ended over 30 min ago with no open positions.
-      const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+      const thirtyMinutesAgo = marketNow() - 30 * 60 * 1000;
       if (endDate.getTime() < thirtyMinutesAgo && !hasOpenPositions) {
         continue;
       }
@@ -1316,7 +1317,7 @@ export class MarketOrchestrator extends EventEmitter {
 
   /** Remove expired markets with no open positions; kept otherwise until resolved. */
   private cleanupExpiredMarkets(): void {
-    const now = Date.now();
+    const now = marketNow();
     const toClean: string[] = [];
 
     for (const [marketId, state] of this.activeMarkets) {

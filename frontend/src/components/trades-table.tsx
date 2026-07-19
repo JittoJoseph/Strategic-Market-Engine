@@ -1,6 +1,7 @@
 "use client";
 
 import type { SimulatedTrade, LiveMarketPrice } from "@/lib/types";
+import { marketNow } from "@/lib/market-time";
 import { pnlColor } from "@/lib/utils";
 import NumberFlow from "@number-flow/react";
 
@@ -113,7 +114,7 @@ export function TradesTable({
             const isPending =
               isOpen &&
               marketEndDate !== null &&
-              marketEndDate.getTime() <= Date.now();
+              marketEndDate.getTime() <= marketNow();
 
             const unrealizedPnl =
               liveBid !== null ? (liveBid - entryPrice) * shares - fees : null;

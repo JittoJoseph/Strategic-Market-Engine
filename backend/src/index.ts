@@ -2,6 +2,7 @@ import { createModuleLogger } from "./utils/logger.js";
 import { getConfig } from "./utils/config.js";
 import { connectDatabase } from "./db/client.js";
 import { getBtcPriceWatcher } from "./services/btc-price-watcher.js";
+import { getMarketClock } from "./services/market-clock.js";
 import { getMarketOrchestrator } from "./services/market-orchestrator.js";
 import { getApiServer } from "./services/api-server.js";
 
@@ -31,6 +32,9 @@ async function main(): Promise<void> {
   );
 
   await connectDatabase();
+
+  // Must precede anything that reasons about market time or stamps prices.
+  await getMarketClock().start();
 
   const btcWatcher = getBtcPriceWatcher();
   btcWatcher.start();

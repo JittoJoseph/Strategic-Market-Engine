@@ -57,6 +57,7 @@ export const WINDOW_CONFIGS: Record<MarketWindow, WindowConfig> = {
 
 export const POLY_URLS = {
   GAMMA_API_BASE: "https://gamma-api.polymarket.com",
+  CLOB_BASE: "https://clob.polymarket.com",
   CLOB_WS: "wss://ws-subscriptions-clob.polymarket.com/ws/market",
   RTDS_WS: "wss://ws-live-data.polymarket.com",
 } as const;

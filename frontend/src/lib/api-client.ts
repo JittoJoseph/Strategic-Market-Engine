@@ -9,6 +9,7 @@ import type {
   HealthResponse,
   WsMessage,
 } from "./types";
+import { seedFromServerTimestamp, syncFromRoundTrip } from "./market-time";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "https://penguinx.onrender.com";
@@ -169,6 +170,8 @@ export class WsClient {
   private reconnectDelay = 1000;
   private listeners: Map<string, Set<(data: WsMessage) => void>> = new Map();
   private isConnecting = false;
+  /** When the outstanding heartbeat left, for round-trip clock sync. */
+  private pingSentAt: number | null = null;
 
   constructor(wsUrl: string = WS_BASE_URL) {
     this.wsUrl = `${wsUrl}/ws`;
@@ -190,6 +193,7 @@ export class WsClient {
       this.ws.onmessage = (event) => {
         try {
           const message: WsMessage = JSON.parse(event.data);
+          this.absorbMarketTime(message);
           this.emit(message.type, message);
           this.emit("*", message);
         } catch {
@@ -235,8 +239,23 @@ export class WsClient {
 
   sendPing(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      this.pingSentAt = Date.now();
       this.ws.send(JSON.stringify({ type: "ping" }));
     }
+  }
+
+  /** Keep client market time aligned with the backend on every inbound frame. */
+  private absorbMarketTime(message: WsMessage): void {
+    if (message.type === "pong") {
+      const serverMs = (message as { ts?: number }).ts;
+      if (typeof serverMs === "number" && this.pingSentAt !== null) {
+        syncFromRoundTrip(this.pingSentAt, serverMs, Date.now());
+        this.pingSentAt = null;
+      }
+      return;
+    }
+    const ts = (message.data as { timestamp?: number } | undefined)?.timestamp;
+    if (typeof ts === "number") seedFromServerTimestamp(ts);
   }
 
   private emit(type: string, message: WsMessage): void {

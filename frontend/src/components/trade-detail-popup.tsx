@@ -1,6 +1,7 @@
 "use client";
 
 import type { SimulatedTrade } from "@/lib/types";
+import { marketNow } from "@/lib/market-time";
 import { MARKET_WINDOW_LABELS, type MarketWindow } from "@/lib/types";
 import { pnlColor } from "@/lib/utils";
 import { useLiveState } from "@/lib/hooks";
@@ -354,7 +355,7 @@ function formatTs(iso: string): string {
 /** Elapsed hold; runs to "now" while the position is still open. */
 function formatDuration(startIso: string, endIso: string | null): string {
   const ms =
-    (endIso ? new Date(endIso).getTime() : Date.now()) -
+    (endIso ? new Date(endIso).getTime() : marketNow()) -
     new Date(startIso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "—";
   const s = Math.floor(ms / 1000);

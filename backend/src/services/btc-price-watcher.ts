@@ -4,13 +4,14 @@ import { createModuleLogger } from "../utils/logger.js";
 import { POLY_URLS } from "../types/index.js";
 import type { BtcPriceData } from "../interfaces/websocket-types.js";
 import { logAudit } from "../db/client.js";
+import { marketNow } from "./market-clock.js";
 
 const logger = createModuleLogger("btc-price-watcher");
 
 /**
  * BTC/USD price watcher over the Polymarket RTDS WebSocket, subscribing to the
- * Chainlink feed. Timestamps are stored as wall-clock Date.now() so getPriceAt()
- * comparisons stay consistent.
+ * Chainlink feed. Ticks are stamped with market time so getPriceAt() can be
+ * queried with market-time instants such as a window boundary.
  *
  * Staleness watchdog: the RTDS server can stop sending ticks while the OS-level
  * TCP connection stays OPEN, so a close event never fires. If no tick arrives
@@ -81,7 +82,7 @@ export class BtcPriceWatcher extends EventEmitter {
   /** Wall-clock age of the last BTC price tick in milliseconds. */
   getPriceAgeMs(): number {
     if (this.lastPriceReceivedMs === 0) return -1; // never received
-    return Date.now() - this.lastPriceReceivedMs;
+    return marketNow() - this.lastPriceReceivedMs;
   }
 
   /** True if the last price tick was received within STALE_THRESHOLD_MS. */
@@ -116,7 +117,7 @@ export class BtcPriceWatcher extends EventEmitter {
           targetMs,
           foundTs: best.timestamp,
           price: best.price,
-          ageMs: Date.now() - best.timestamp,
+          ageMs: marketNow() - best.timestamp,
         },
         "Found historical BTC price",
       );
@@ -151,7 +152,7 @@ export class BtcPriceWatcher extends EventEmitter {
    * Returns null when there is too little history for a stable estimate.
    */
   getRealizedVol(windowMs: number): number | null {
-    const cutoff = Date.now() - windowMs;
+    const cutoff = marketNow() - windowMs;
     const h = this.priceHistory;
     let sumSq = 0;
     let elapsedSec = 0;
@@ -173,8 +174,9 @@ export class BtcPriceWatcher extends EventEmitter {
   }
 
   private setPrice(price: number): void {
-    // Wall-clock time — RTDS source timestamps can lag real time significantly.
-    const timestamp = Date.now();
+    // Market time, not the RTDS source timestamp: source stamps can lag real
+    // time, and this must share a base with window boundaries for getPriceAt().
+    const timestamp = marketNow();
     this.currentPrice = price;
     this.lastTimestamp = timestamp;
     this.lastPriceReceivedMs = timestamp;
@@ -183,7 +185,7 @@ export class BtcPriceWatcher extends EventEmitter {
     this.ticksSinceLastPrune++;
     if (this.ticksSinceLastPrune >= BtcPriceWatcher.PRUNE_INTERVAL_TICKS) {
       this.ticksSinceLastPrune = 0;
-      const cutoff = Date.now() - BtcPriceWatcher.HISTORY_TTL_MS;
+      const cutoff = marketNow() - BtcPriceWatcher.HISTORY_TTL_MS;
       let pruneIdx = 0;
       while (
         pruneIdx < this.priceHistory.length &&
@@ -204,7 +206,7 @@ export class BtcPriceWatcher extends EventEmitter {
       if (!this.running) return;
       if (this.lastPriceReceivedMs === 0) return;
 
-      const ageMs = Date.now() - this.lastPriceReceivedMs;
+      const ageMs = marketNow() - this.lastPriceReceivedMs;
       if (ageMs < BtcPriceWatcher.STALE_THRESHOLD_MS) return;
 
       logger.warn(
