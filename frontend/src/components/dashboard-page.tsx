@@ -304,12 +304,12 @@ export function DashboardPage() {
                     value={`${Math.round(stats.config.sigmaWindowMs / 1000)}s`}
                   />
                   <StatRow
-                    label="Decided Floor ×"
-                    value={stats.config.decidedFloorMultiplier.toString()}
+                    label="Flow Burst"
+                    value={`${stats.config.flowMinPrints} × ≥${stats.config.flowMinPrintShares} sh in ${(stats.config.flowBurstMs / 1000).toFixed(1)}s`}
                   />
                   <StatRow
-                    label="Decided SD Multiple"
-                    value={stats.config.decidedSdMultiple.toString()}
+                    label="Model Veto"
+                    value={`≥ ${stats.config.vetoSdMultiple}σ against`}
                   />
                   <StatRow
                     label="Market Liveness"

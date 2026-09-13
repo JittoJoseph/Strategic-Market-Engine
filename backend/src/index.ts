@@ -1,6 +1,6 @@
 import { createModuleLogger } from "./utils/logger.js";
 import { getConfig } from "./utils/config.js";
-import { FIXED_POSITION_BUDGET_USD, WINDOW_CONFIG } from "./types/index.js";
+import { FIXED_POSITION_BUDGET_USD, WINDOW_CONFIG, STRATEGY } from "./types/index.js";
 import { connectDatabase } from "./db/client.js";
 import { getBtcPriceWatcher } from "./services/btc-price-watcher.js";
 import { getMarketClock } from "./services/market-clock.js";
@@ -12,7 +12,7 @@ const logger = createModuleLogger("main");
 async function main(): Promise<void> {
   logger.info("═══════════════════════════════════════════");
   logger.info("  PenguinX BTC Analysis — v4.0");
-  logger.info("  Probable Side at a Discount — BTC 15-Minute Up/Down");
+  logger.info("  Persistent-Flow Strategy - BTC 15-Minute Up/Down");
   logger.info("═══════════════════════════════════════════");
 
   const config = getConfig();
@@ -20,15 +20,17 @@ async function main(): Promise<void> {
     {
       window: WINDOW_CONFIG.label,
       twapLookbackSeconds: WINDOW_CONFIG.twapLookbackSeconds,
-      entryBand: `${config.strategy.minEntryPrice}–${config.strategy.maxEntryPrice}`,
-      entryWindowSec: `${config.strategy.entryWindowCloseSeconds}–${config.strategy.entryWindowOpenSeconds}`,
-      decidedFloorMultiplier: config.strategy.decidedFloorMultiplier,
-      decidedSdMultiple: config.strategy.decidedSdMultiple,
-      marketLivenessMs: config.strategy.marketLivenessMs,
-      sigmaWindowMs: config.strategy.sigmaWindowMs,
+      entryBand: `${STRATEGY.minEntryPrice}–${STRATEGY.maxEntryPrice}`,
+      entryWindowSec: `${STRATEGY.entryWindowCloseSeconds}–${STRATEGY.entryWindowOpenSeconds}`,
+      flowMinPrintShares: STRATEGY.flowMinPrintShares,
+      flowMinPrints: STRATEGY.flowMinPrints,
+      flowBurstMs: STRATEGY.flowBurstMs,
+      vetoSdMultiple: STRATEGY.vetoSdMultiple,
+      marketLivenessMs: STRATEGY.marketLivenessMs,
+      sigmaWindowMs: STRATEGY.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
       positionBudget: `$${FIXED_POSITION_BUDGET_USD} fixed (simulation)`,
-      stopLoss: `${(config.strategy.stopLossFraction * 100).toFixed(0)}% below entry (always on)`,
+      stopLoss: `${(STRATEGY.stopLossFraction * 100).toFixed(0)}% below entry (always on)`,
     },
     "Configuration loaded",
   );

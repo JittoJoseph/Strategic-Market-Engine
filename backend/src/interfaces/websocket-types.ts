@@ -46,7 +46,10 @@ export interface BookUpdateEvent {
 
 export interface TradeEvent {
   tokenId: string;
+  /** Side of the aggressor relative to this token. */
+  takerSide: "BUY" | "SELL";
   price: number;
+  size: number;
   timestamp: number;
 }
 
@@ -67,17 +70,6 @@ export interface MarketSubscriptionMessage {
 export interface SubscriptionUpdateMessage {
   assets_ids: string[];
   operation: "subscribe" | "unsubscribe";
-}
-
-export interface RTDSMessage {
-  topic: string;
-  type: string;
-  timestamp: number;
-  payload: {
-    symbol: string;
-    timestamp: number;
-    value: number;
-  };
 }
 
 export interface BtcPriceData {

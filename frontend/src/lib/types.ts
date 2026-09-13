@@ -26,8 +26,10 @@ export interface SimulatedTrade {
   forecastMarginUsd: string | null;
   /** Standard deviation of the settlement forecast, in dollars */
   forecastSdUsd: string | null;
-  /** Margin the window had to clear to count as decided, in dollars */
-  decidedFloorUsd: string | null;
+  /** Large same-side taker prints in the burst that triggered the entry */
+  flowPrints: number | null;
+  /** Shares across those prints */
+  flowShares: string | null;
   secondsToEnd: string | null;
   /** Lowest executable best bid observed while the position was open */
   minPriceDuringPosition: string | null;
@@ -128,8 +130,10 @@ export interface LiveState {
     entryWindowOpenSeconds: number;
     entryWindowCloseSeconds: number;
     sigmaWindowMs: number;
-    decidedFloorMultiplier: number;
-    decidedSdMultiple: number;
+    flowMinPrintShares: number;
+    flowMinPrints: number;
+    flowBurstMs: number;
+    vetoSdMultiple: number;
     marketLivenessMs: number;
     stopLossFraction: number;
     startingCapital: number;
@@ -200,9 +204,7 @@ export interface PerformanceMetrics {
   largestWin: string;
   largestLoss: string;
   totalFees: string;
-  avgMarginOverFloor: string;
   openPositions: number;
-  unrealizedPnl: string;
   cashBalance: string;
   initialCapital: string;
   openPositionsValue: string;
