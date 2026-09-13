@@ -24,25 +24,27 @@ export const CRYPTO_FEE_RATE = 0.07;
 export const POLYMARKET_MIN_ORDER_SIZE = 5;
 export const FIXED_POSITION_BUDGET_USD = 5;
 
+/** Calibrated on the 4-day tape; not deployment settings. See README. */
+export const STRATEGY = {
+  entryWindowOpenSeconds: 120,
+  entryWindowCloseSeconds: 10,
+  minEntryPrice: 0.15,
+  maxEntryPrice: 0.7,
+  flowMinPrintShares: 50,
+  flowMinPrints: 2,
+  flowBurstMs: 3_000,
+  vetoSdMultiple: 3,
+  sigmaWindowMs: 180_000,
+  maxRawStalenessMs: 5_000,
+  stopLossFraction: 0.35,
+  executionLatencyMs: 50,
+  scanIntervalMs: 60_000,
+  marketLivenessMs: 120_000,
+} as const;
+
 export const ConfigSchema = z.object({
   db: z.object({ url: z.string() }),
   portfolio: z.object({ startingCapital: z.number().min(1).max(10_000_000) }),
-  strategy: z.object({
-    entryWindowOpenSeconds: z.number().min(5).max(900),
-    entryWindowCloseSeconds: z.number().min(1).max(120),
-    minEntryPrice: z.number().min(0.01).max(0.9),
-    maxEntryPrice: z.number().min(0.1).max(0.99),
-    flowMinPrintShares: z.number().min(5).max(10_000),
-    flowMinPrints: z.number().int().min(2).max(20),
-    flowBurstMs: z.number().min(250).max(30_000),
-    vetoSdMultiple: z.number().min(0).max(30),
-    sigmaWindowMs: z.number().min(10_000).max(600_000),
-    maxRawStalenessMs: z.number().min(1000).max(60_000),
-    stopLossFraction: z.number().min(0.05).max(0.9),
-    scanIntervalMs: z.number().min(10000),
-    executionLatencyMs: z.number().min(0).max(5000),
-    marketLivenessMs: z.number().min(10_000).max(900_000),
-  }),
   admin: z.object({ password: z.string().min(1) }),
   server: z.object({ port: z.number().min(1).max(65535), host: z.string() }),
   logging: z.object({ level: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]) }),

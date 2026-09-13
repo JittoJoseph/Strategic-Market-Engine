@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
-import { getConfig } from "../utils/config.js";
+import { STRATEGY } from "../types/index.js";
 import { marketNow } from "./market-clock.js";
 import type { SettlementForecast } from "./settlement-model.js";
 
@@ -151,7 +151,7 @@ export class StrategyEngine extends EventEmitter {
       this.lastTradeByMarket.set(market.marketId, timestamp);
     }
 
-    const { flowMinPrintShares, flowBurstMs, flowMinPrints } = getConfig().strategy;
+    const { flowMinPrintShares, flowBurstMs, flowMinPrints } = STRATEGY;
     if (!(size >= flowMinPrintShares)) return null;
 
     const tokens = this.tokensByMarket.get(market.marketId);
@@ -180,7 +180,7 @@ export class StrategyEngine extends EventEmitter {
     const market = this.markets.get(tokenId);
     if (!market || this.tradedMarkets.has(market.marketId)) return null;
 
-    const config = getConfig().strategy;
+    const config = STRATEGY;
     const now = marketNow();
     const secondsToEnd = (market.endDate.getTime() - now) / 1000;
     const quote = this.quotes.get(tokenId);

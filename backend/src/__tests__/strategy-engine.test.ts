@@ -9,27 +9,6 @@ vi.mock("../utils/logger.js", () => {
   return { createModuleLogger: () => childLogger, getLogger: () => childLogger };
 });
 
-const strategyConfig = {
-  entryWindowOpenSeconds: 120,
-  entryWindowCloseSeconds: 10,
-  minEntryPrice: 0.15,
-  maxEntryPrice: 0.7,
-  flowMinPrintShares: 50,
-  flowBurstMs: 3_000,
-  flowMinPrints: 2,
-  vetoSdMultiple: 3,
-  sigmaWindowMs: 180_000,
-  maxRawStalenessMs: 5_000,
-  stopLossFraction: 0.35,
-  scanIntervalMs: 60_000,
-  executionLatencyMs: 50,
-  marketLivenessMs: 120_000,
-};
-
-vi.mock("../utils/config.js", () => ({
-  getConfig: () => ({ strategy: strategyConfig }),
-}));
-
 const NOW = 1_800_000_000_000;
 vi.mock("../services/market-clock.js", () => ({ marketNow: () => NOW }));
 

@@ -1,7 +1,6 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
-import { getConfig } from "../utils/config.js";
-import { WINDOW_CONFIG, FIXED_POSITION_BUDGET_USD } from "../types/index.js";
+import { WINDOW_CONFIG, FIXED_POSITION_BUDGET_USD, STRATEGY } from "../types/index.js";
 import {
   getDb,
   createSimulatedTrade,
@@ -188,7 +187,7 @@ export class MarketOrchestrator extends EventEmitter {
       btcPriceAgeMs: this.btcWatcher.getTwapAgeMs(),
       btcRawAgeMs: this.btcWatcher.getRawAgeMs(),
       btcPriceFresh: this.btcWatcher.isPriceFresh(),
-      rawSigma: this.btcWatcher.getRawSigma(getConfig().strategy.sigmaWindowMs),
+      rawSigma: this.btcWatcher.getRawSigma(STRATEGY.sigmaWindowMs),
     };
   }
 
@@ -217,7 +216,7 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   getOpenPositionSnapshots() {
-    const fraction = getConfig().strategy.stopLossFraction;
+    const fraction = STRATEGY.stopLossFraction;
     return [...this.openPositions.values()].map((pos) => ({
       tradeId: pos.tradeId,
       tokenId: pos.tokenId,
@@ -451,7 +450,7 @@ export class MarketOrchestrator extends EventEmitter {
     this.strategyEngine.updateQuote(tokenId, bestBid, bestAsk);
 
     const now = marketNow();
-    const fraction = getConfig().strategy.stopLossFraction;
+    const fraction = STRATEGY.stopLossFraction;
     for (const pos of this.positionsOnToken(tokenId)) {
       // Past the window end the book is thin and settlement decides; the stop never fires there.
       if (pos.marketEndDate.getTime() <= now) continue;
@@ -475,9 +474,8 @@ export class MarketOrchestrator extends EventEmitter {
    * the identity the forecast rests on.
    */
   private refreshForecasts(tick: BtcPriceData): void {
-    const config = getConfig();
-    if (this.btcWatcher.getRawAgeMs() > config.strategy.maxRawStalenessMs) return;
-    const rawSigma = this.btcWatcher.getRawSigma(config.strategy.sigmaWindowMs);
+    if (this.btcWatcher.getRawAgeMs() > STRATEGY.maxRawStalenessMs) return;
+    const rawSigma = this.btcWatcher.getRawSigma(STRATEGY.sigmaWindowMs);
     if (!rawSigma) return;
     const anchorMs = tick.timestamp;
     const rawNow = this.btcWatcher.getRawAt(anchorMs);
@@ -544,20 +542,19 @@ export class MarketOrchestrator extends EventEmitter {
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
     if (this.paused || this.inFlightTokenIds.has(opp.tokenId)) return;
     this.inFlightTokenIds.add(opp.tokenId);
-    const config = getConfig();
     const release = () => this.strategyEngine.releaseMarket(opp.marketId);
 
     try {
       // Polymarket holds taker orders for its delay and revalidates before
       // matching, so the fill comes from the book after the hold, not the one
       // that triggered the entry.
-      await sleep(config.strategy.executionLatencyMs);
+      await sleep(STRATEGY.executionLatencyMs);
       if (this.paused) return release();
 
       const book = this.wsWatcher.getBook(opp.tokenId);
       if (!book?.asks.length) return release();
 
-      const execution = simulateLimitBuy(book, FIXED_POSITION_BUDGET_USD, config.strategy.maxEntryPrice);
+      const execution = simulateLimitBuy(book, FIXED_POSITION_BUDGET_USD, STRATEGY.maxEntryPrice);
       if (execution.totalShares <= 0 || execution.belowMinimumOrderSize) {
         logger.warn(
           { tokenId: opp.tokenId, filled: execution.totalShares, bestAsk: this.wsWatcher.getBestAsk(opp.tokenId) },
@@ -671,7 +668,7 @@ export class MarketOrchestrator extends EventEmitter {
    */
   private async submitStopLossExit(pos: OpenPosition): Promise<void> {
     try {
-      await sleep(getConfig().strategy.executionLatencyMs);
+      await sleep(STRATEGY.executionLatencyMs);
       // Settlement may have closed the row while the order was in flight.
       if (!this.openPositions.has(pos.tradeId)) return;
 

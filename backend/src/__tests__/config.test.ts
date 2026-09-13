@@ -1,39 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { ConfigSchema } from "../types/index.js";
+import { ConfigSchema, STRATEGY } from "../types/index.js";
 import { loadConfig } from "../utils/config.js";
 
 const REQUIRED = {
   SUPABASE_DATABASE_URL: "postgresql://u:p@localhost:5432/db",
   ADMIN_PASSWORD: "x",
 };
-
-const STRATEGY_KEYS = [
-  "ENTRY_WINDOW_OPEN_SECONDS",
-  "ENTRY_WINDOW_CLOSE_SECONDS",
-  "MIN_ENTRY_PRICE",
-  "MAX_ENTRY_PRICE",
-  "FLOW_MIN_PRINT_SHARES",
-  "FLOW_MIN_PRINTS",
-  "FLOW_BURST_MS",
-  "VETO_SD_MULTIPLE",
-  "SIGMA_WINDOW_MS",
-  "MAX_RAW_STALENESS_MS",
-  "STOP_LOSS_FRACTION",
-  "EXECUTION_LATENCY_MS",
-  "MARKET_LIVENESS_MS",
-  "SCAN_INTERVAL_MS",
-  "STARTING_CAPITAL",
-];
+const KEYS = [...Object.keys(REQUIRED), "STARTING_CAPITAL", "PORT", "HOST", "LOG_LEVEL", "NODE_ENV"];
 
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
-  saved = {};
-  for (const k of [...STRATEGY_KEYS, ...Object.keys(REQUIRED)]) {
-    saved[k] = process.env[k];
-    delete process.env[k];
-  }
+  saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  for (const k of KEYS) delete process.env[k];
   Object.assign(process.env, REQUIRED);
 });
 
@@ -44,49 +24,25 @@ afterEach(() => {
   }
 });
 
-const freshLoadConfig = async () => loadConfig();
-
 describe("configuration", () => {
-  it("built-in defaults satisfy the schema", async () => {
-    const config = await freshLoadConfig();
-    expect(ConfigSchema.safeParse(config).success).toBe(true);
+  it("built-in defaults satisfy the schema", () => {
+    expect(ConfigSchema.safeParse(loadConfig()).success).toBe(true);
   });
 
-  it("the shipped .env.example satisfies the schema", async () => {
+  it("the shipped .env.example satisfies the schema", () => {
     const text = readFileSync(`${import.meta.dirname}/../../.env.example`, "utf8");
     for (const line of text.split("\n")) {
       const m = line.match(/^([A-Z_]+)=(.*)$/);
-      if (m && STRATEGY_KEYS.includes(m[1]!)) process.env[m[1]!] = m[2]!.trim();
+      if (m && KEYS.includes(m[1]!)) process.env[m[1]!] = m[2]!.trim();
     }
-    const config = await freshLoadConfig();
-    expect(ConfigSchema.safeParse(config).success).toBe(true);
+    expect(ConfigSchema.safeParse(loadConfig()).success).toBe(true);
   });
 
-  it("entry window brackets the calibrated horizon", async () => {
-    const config = await freshLoadConfig();
-    expect(config.strategy.entryWindowOpenSeconds).toBeLessThanOrEqual(300);
-    expect(config.strategy.entryWindowCloseSeconds).toBeLessThan(
-      config.strategy.entryWindowOpenSeconds,
-    );
-  });
-
-  it("rejects an entry window the floor table cannot cover", () => {
-    const result = ConfigSchema.shape.strategy.safeParse({
-      entryWindowOpenSeconds: 2000,
-      entryWindowCloseSeconds: 5,
-      minEntryPrice: 0.15,
-      maxEntryPrice: 0.7,
-      flowMinPrintShares: 50,
-      flowMinPrints: 2,
-      flowBurstMs: 3_000,
-      vetoSdMultiple: 3,
-      sigmaWindowMs: 180_000,
-      maxRawStalenessMs: 5_000,
-      stopLossFraction: 0.35,
-      scanIntervalMs: 60_000,
-      executionLatencyMs: 50,
-      marketLivenessMs: 120_000,
-    });
-    expect(result.success).toBe(false);
+  it("strategy constants are internally consistent", () => {
+    expect(STRATEGY.entryWindowCloseSeconds).toBeLessThan(STRATEGY.entryWindowOpenSeconds);
+    expect(STRATEGY.minEntryPrice).toBeLessThan(STRATEGY.maxEntryPrice);
+    expect(STRATEGY.flowMinPrints).toBeGreaterThanOrEqual(2);
+    expect(STRATEGY.stopLossFraction).toBeGreaterThan(0);
+    expect(STRATEGY.stopLossFraction).toBeLessThan(1);
   });
 });

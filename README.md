@@ -40,10 +40,10 @@ fill. Two RTDS feeds are consumed: the `crypto_prices_twap_sixty` series that
 settlement runs on, and the unsmoothed `crypto_prices_chainlink` series that
 drives it.
 
-**Burst.** A taker fill of at least `FLOW_MIN_PRINT_SHARES` shares is a large
+**Burst.** A taker fill of at least `flowMinPrintShares` shares is a large
 print. A taker buying a token is flow toward that outcome; a taker selling it
-is flow toward the other. `FLOW_MIN_PRINTS` large prints toward the same
-outcome inside `FLOW_BURST_MS` form a burst, and the burst is scored the moment
+is flow toward the other. `flowMinPrints` large prints toward the same
+outcome inside `flowBurstMs` form a burst, and the burst is scored the moment
 it completes.
 
 **Entry.** Between 120 and 10 seconds before close, buy the burst side if its
@@ -53,7 +53,7 @@ priced the side, and above 0.70 following flow measured negative.
 
 **Veto.** The settlement forecast — the expected closing TWAP given spot and
 the stretch about to roll out of the average — never opens a trade. It vetoes
-one: a burst against a side the forecast is at least `VETO_SD_MULTIPLE`
+one: a burst against a side the forecast is at least `vetoSdMultiple`
 standard deviations sure of is not followed.
 
 **Live market.** No entry unless the market has printed a real fill in the
@@ -74,7 +74,10 @@ for Polymarket's 50 ms taker delay and matched against the book as it stands
 after the hold. The taker fee is Polymarket's published crypto schedule,
 `shares × 0.07 × p × (1−p)`.
 
-All parameters are environment-tunable; see [`backend/.env.example`](backend/.env.example).
+The strategy constants live in one place, `STRATEGY` in
+[`backend/src/types/index.ts`](backend/src/types/index.ts). They are calibration
+results, not deployment settings; the environment carries only credentials, the
+server port and the starting capital.
 
 ## What to expect, and what would falsify it
 

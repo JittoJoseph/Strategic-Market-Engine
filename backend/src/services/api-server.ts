@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createModuleLogger } from "../utils/logger.js";
 import { getConfig } from "../utils/config.js";
-import { FIXED_POSITION_BUDGET_USD, WINDOW_CONFIG } from "../types/index.js";
+import { FIXED_POSITION_BUDGET_USD, WINDOW_CONFIG, STRATEGY } from "../types/index.js";
 import { getDb, wipeAndResetPortfolio, getPortfolio } from "../db/client.js";
 import * as schema from "../db/schema.js";
 import { eq, desc } from "drizzle-orm";
@@ -261,17 +261,17 @@ export function buildLiveState() {
     config: {
       marketWindow: WINDOW_CONFIG.label,
       twapLookbackSeconds: WINDOW_CONFIG.twapLookbackSeconds,
-      minEntryPrice: config.strategy.minEntryPrice,
-      maxEntryPrice: config.strategy.maxEntryPrice,
-      entryWindowOpenSeconds: config.strategy.entryWindowOpenSeconds,
-      entryWindowCloseSeconds: config.strategy.entryWindowCloseSeconds,
-      sigmaWindowMs: config.strategy.sigmaWindowMs,
-      flowMinPrintShares: config.strategy.flowMinPrintShares,
-      flowMinPrints: config.strategy.flowMinPrints,
-      flowBurstMs: config.strategy.flowBurstMs,
-      vetoSdMultiple: config.strategy.vetoSdMultiple,
-      marketLivenessMs: config.strategy.marketLivenessMs,
-      stopLossFraction: config.strategy.stopLossFraction,
+      minEntryPrice: STRATEGY.minEntryPrice,
+      maxEntryPrice: STRATEGY.maxEntryPrice,
+      entryWindowOpenSeconds: STRATEGY.entryWindowOpenSeconds,
+      entryWindowCloseSeconds: STRATEGY.entryWindowCloseSeconds,
+      sigmaWindowMs: STRATEGY.sigmaWindowMs,
+      flowMinPrintShares: STRATEGY.flowMinPrintShares,
+      flowMinPrints: STRATEGY.flowMinPrints,
+      flowBurstMs: STRATEGY.flowBurstMs,
+      vetoSdMultiple: STRATEGY.vetoSdMultiple,
+      marketLivenessMs: STRATEGY.marketLivenessMs,
+      stopLossFraction: STRATEGY.stopLossFraction,
       startingCapital: config.portfolio.startingCapital,
       positionBudgetUsd: FIXED_POSITION_BUDGET_USD,
     },

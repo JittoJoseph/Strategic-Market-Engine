@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
-import { getConfig } from "../utils/config.js";
-import { WINDOW_CONFIG } from "../types/index.js";
+import { STRATEGY, WINDOW_CONFIG } from "../types/index.js";
+
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { marketNow } from "./market-clock.js";
 
@@ -21,7 +21,7 @@ export class MarketScanner extends EventEmitter {
     if (this.running) return;
     this.running = true;
     await this.scan();
-    this.scanInterval = setInterval(() => this.scan(), getConfig().strategy.scanIntervalMs);
+    this.scanInterval = setInterval(() => this.scan(), STRATEGY.scanIntervalMs);
   }
 
   stop(): void {
