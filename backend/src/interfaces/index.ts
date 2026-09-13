@@ -11,6 +11,5 @@ export type {
   MarketResolvedEvent,
   MarketSubscriptionMessage,
   SubscriptionUpdateMessage,
-  RTDSMessage,
   BtcPriceData,
 } from "./websocket-types.js";

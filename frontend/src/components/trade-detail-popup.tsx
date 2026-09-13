@@ -85,7 +85,8 @@ export function TradeDetailPopup({
   const btcAtEntry = num(trade.twapAtEntry);
   const strike = num(trade.strike);
   const distance = num(trade.forecastMarginUsd);
-  const decidedFloor = num(trade.decidedFloorUsd);
+  const flowShares = num(trade.flowShares);
+  const flowPrints = trade.flowPrints;
   const forecastSd = num(trade.forecastSdUsd);
   const enteredAt = num(trade.secondsToEnd);
 
@@ -242,18 +243,18 @@ export function TradeDetailPopup({
                 value={`$${forecastSd.toFixed(2)}`}
               />
             )}
-            {decidedFloor !== null && (
+            {flowPrints !== null && flowPrints !== undefined && (
               <Cell
-                label="DECIDED FLOOR"
-                hint="Margin the window had to clear to count as decided"
-                value={`$${decidedFloor.toFixed(2)}`}
+                label="FLOW BURST"
+                hint="Large same-side taker prints that triggered the entry, and their shares"
+                value={`${flowPrints} × ${flowShares !== null ? flowShares.toFixed(0) : "?"} sh`}
               />
             )}
-            {distance !== null && decidedFloor !== null && decidedFloor > 0 && (
+            {distance !== null && forecastSd !== null && forecastSd > 0 && (
               <Cell
-                label="MARGIN / FLOOR"
-                hint="How far past the decided threshold the entry was"
-                value={`${(Math.abs(distance) / decidedFloor).toFixed(1)}×`}
+                label="FORECAST Z"
+                hint="Forecast margin over its sd; the model only vetoes, never picks"
+                value={`${(distance / forecastSd).toFixed(1)}σ`}
               />
             )}
             {enteredAt !== null && (

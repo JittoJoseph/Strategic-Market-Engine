@@ -12,7 +12,7 @@ const logger = createModuleLogger("main");
 async function main(): Promise<void> {
   logger.info("═══════════════════════════════════════════");
   logger.info("  PenguinX BTC Analysis — v4.0");
-  logger.info("  Probable Side at a Discount — BTC 15-Minute Up/Down");
+  logger.info("  Persistent-Flow Strategy - BTC 15-Minute Up/Down");
   logger.info("═══════════════════════════════════════════");
 
   const config = getConfig();
@@ -22,8 +22,10 @@ async function main(): Promise<void> {
       twapLookbackSeconds: WINDOW_CONFIG.twapLookbackSeconds,
       entryBand: `${config.strategy.minEntryPrice}–${config.strategy.maxEntryPrice}`,
       entryWindowSec: `${config.strategy.entryWindowCloseSeconds}–${config.strategy.entryWindowOpenSeconds}`,
-      decidedFloorMultiplier: config.strategy.decidedFloorMultiplier,
-      decidedSdMultiple: config.strategy.decidedSdMultiple,
+      flowMinPrintShares: config.strategy.flowMinPrintShares,
+      flowMinPrints: config.strategy.flowMinPrints,
+      flowBurstMs: config.strategy.flowBurstMs,
+      vetoSdMultiple: config.strategy.vetoSdMultiple,
       marketLivenessMs: config.strategy.marketLivenessMs,
       sigmaWindowMs: config.strategy.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,

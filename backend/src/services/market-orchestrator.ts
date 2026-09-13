@@ -15,10 +15,7 @@ import * as schema from "../db/schema.js";
 import { eq, and, desc, gte } from "drizzle-orm";
 
 import { getMarketScanner, MarketScanner } from "./market-scanner.js";
-import {
-  getMarketWebSocketWatcher,
-  MarketWebSocketWatcher,
-} from "./market-ws-watcher.js";
+import { getMarketWebSocketWatcher, MarketWebSocketWatcher } from "./market-ws-watcher.js";
 import {
   getStrategyEngine,
   StrategyEngine,
@@ -27,12 +24,7 @@ import {
   type SkipReason,
 } from "./strategy-engine.js";
 import { forecastSettlement, rollingOutRange } from "./settlement-model.js";
-import {
-  simulateLimitBuy,
-  simulateLimitSell,
-  calculateWinProfit,
-  stopTriggerPrice,
-} from "./execution-simulator.js";
+import { simulateLimitBuy, simulateLimitSell, stopTriggerPrice } from "./execution-simulator.js";
 import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
 import { marketNow } from "./market-clock.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
@@ -47,52 +39,32 @@ import type {
 
 const logger = createModuleLogger("market-orchestrator");
 
+interface WindowSummary {
+  bursts: number;
+  firstBurstTau: number | null;
+  lastBurstSide: string | null;
+  minBurstAsk: number | null;
+  minBurstAskTau: number | null;
+  lastSkipReason: SkipReason | null;
+  traded: boolean;
+}
+
 interface ActiveMarketState {
   marketId: string;
   conditionId: string | null;
   yesTokenId: string;
   noTokenId: string;
+  outcomes: string[];
   question: string;
   slug: string | null;
   endDate: Date;
-  targetPrice: number | null;
-  /** BTC price at window start — the "price to beat"; the window resolves UP if
-   *  BTC ends >= this value, DOWN otherwise. */
-  btcPriceAtWindowStart: number | null;
-  outcomes: string[];
+  /** Window-open TWAP; null until observed, and never inferred from anything else. */
+  strike: number | null;
   lastPrices: Record<string, { bid: number; ask: number }>;
   summary: WindowSummary;
-  subscribedWs: boolean;
   resolved: boolean;
-  rawMarket: any;
+  rawMarket: unknown;
 }
-
-/**
- * What the window looked like from the strategy's side, kept per market and
- * written once at cleanup. The untraded windows are the baseline: without the
- * cheapest ask seen while decided there is no way to tell whether the price cap
- * is set where the opportunities are.
- */
-interface WindowSummary {
-  decidedSeconds: number;
-  firstDecidedTau: number | null;
-  decidedSide: "Up" | "Down" | null;
-  /** Cheapest ask seen on the decided side while decided, any price. */
-  minDecidedAsk: number | null;
-  minDecidedAskTau: number | null;
-  lastSkipReason: SkipReason | null;
-  traded: boolean;
-}
-
-const emptySummary = (): WindowSummary => ({
-  decidedSeconds: 0,
-  firstDecidedTau: null,
-  decidedSide: null,
-  minDecidedAsk: null,
-  minDecidedAskTau: null,
-  lastSkipReason: null,
-  traded: false,
-});
 
 interface OpenPosition {
   tradeId: string;
@@ -101,184 +73,99 @@ interface OpenPosition {
   outcomeLabel: string;
   entryPrice: number;
   entryShares: number;
-  fees: number;
-  /** Cash spent (shares × avgPrice + fees); the cost basis for portfolio value. */
   actualCost: number;
   marketEndDate: Date;
-  /** Lowest executable bid seen since entry (observational only). */
   minBid: number;
-  /** Shares still held. A stop that only partly fills leaves a remainder. */
   remainingShares: number;
-  /** Gross USD taken from stop sales so far, and the fees paid on them. */
   exitGross: number;
   exitFees: number;
   stopTriggered: boolean;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const round = (v: number, dp = 4) => Math.round(v * 10 ** dp) / 10 ** dp;
+const round = (v: number | null, dp = 4) => (v === null ? null : Math.round(v * 10 ** dp) / 10 ** dp);
+const CLEANUP_INTERVAL_MS = 10_000;
 
-/**
- * Central coordinator: the scanner finds BTC window markets, this subscribes to
- * their CLOB price feed, the strategy engine flags entries, the execution
- * simulator fills them, and positions are resolved WIN/LOSS via WS + polling.
- */
 export class MarketOrchestrator extends EventEmitter {
-  private scanner: MarketScanner;
-  private wsWatcher: MarketWebSocketWatcher;
-  private strategyEngine: StrategyEngine;
-  private btcWatcher: BtcPriceWatcher;
-  private client: PolymarketClient;
-  readonly portfolioManager: PortfolioManager;
+  private scanner: MarketScanner = getMarketScanner();
+  private wsWatcher: MarketWebSocketWatcher = getMarketWebSocketWatcher();
+  private strategyEngine: StrategyEngine = getStrategyEngine();
+  private btcWatcher: BtcPriceWatcher = getBtcPriceWatcher();
+  private client: PolymarketClient = getPolymarketClient();
+  readonly portfolioManager = new PortfolioManager();
 
-  private activeMarkets: Map<string, ActiveMarketState> = new Map();
-  /** conditionId → marketId */
-  private conditionIdMap: Map<string, string> = new Map();
-  /** tokenId → marketId */
-  private tokenToMarket: Map<string, string> = new Map();
-  private openPositions: Map<string, OpenPosition> = new Map();
-  /** marketId → tradeIds */
-  private positionsByMarket: Map<string, Set<string>> = new Map();
-  /** tokenId → tradeIds */
-  private positionsByToken: Map<string, Set<string>> = new Map();
-  /** tokenIds mid-execution in onOpportunity — blocks concurrent duplicates */
-  private inFlightTokenIds: Set<string> = new Set();
-  /** marketIds still awaiting btcPriceAtWindowStart */
-  private pendingBtcFills: Set<string> = new Set();
-  private resolutionTimers: Map<string, ReturnType<typeof setTimeout>> =
-    new Map();
+  private activeMarkets = new Map<string, ActiveMarketState>();
+  private conditionIdMap = new Map<string, string>();
+  private tokenToMarket = new Map<string, string>();
+  private openPositions = new Map<string, OpenPosition>();
+  private inFlightTokenIds = new Set<string>();
+  private resolutionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly windowDurationMs = WINDOW_CONFIG.durationMs;
 
   private running = false;
   private paused = false;
   private cycleCount = 0;
 
-  constructor() {
-    super();
-    this.scanner = getMarketScanner();
-    this.wsWatcher = getMarketWebSocketWatcher();
-    this.strategyEngine = getStrategyEngine();
-    this.btcWatcher = getBtcPriceWatcher();
-    this.client = getPolymarketClient();
-    this.portfolioManager = new PortfolioManager();
-  }
-
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
-    const config = getConfig();
-
     await this.portfolioManager.init();
-
-    logger.info(
-      {
-        label: WINDOW_CONFIG.label,
-        twapLookbackSeconds: WINDOW_CONFIG.twapLookbackSeconds,
-        entryWindowSec: `${config.strategy.entryWindowCloseSeconds}-${config.strategy.entryWindowOpenSeconds}`,
-        decidedFloorMultiplier: config.strategy.decidedFloorMultiplier,
-        decidedSdMultiple: config.strategy.decidedSdMultiple,
-        positionBudgetUsd: FIXED_POSITION_BUDGET_USD,
-      },
-      "Starting market orchestrator",
-    );
-
     await this.loadOpenPositions();
     await this.loadActiveMarkets();
-    this.tryFillBtcWindowStart();
+    this.fillStrikes();
     this.wireEvents();
 
     this.wsWatcher.start();
     await this.scanner.start();
+    this.cleanupTimer = setInterval(() => this.cleanupExpiredMarkets(), CLEANUP_INTERVAL_MS);
 
-    this.cleanupTimer = setInterval(() => this.cleanupExpiredMarkets(), 10_000);
-
-    logger.info("Market orchestrator fully started");
+    logger.info("Market orchestrator started");
   }
 
   stop(): void {
     this.running = false;
     this.scanner.stop();
     this.wsWatcher.stop();
-
     this.stopCleanupTimer();
     this.clearResolutionTimers();
-
-    logger.info("Market orchestrator stopped");
   }
 
-  /** Pause new entries; open positions stay tracked and the WS stays alive. */
+  /** Blocks new entries. Open positions keep their stop and still settle. */
   pause(): void {
     this.paused = true;
     this.scanner.stop();
     this.stopCleanupTimer();
-
-    logger.warn("System paused — new positions blocked, existing tracked");
-  }
-
-  private stopCleanupTimer(): void {
-    if (!this.cleanupTimer) return;
-    clearInterval(this.cleanupTimer);
-    this.cleanupTimer = null;
-  }
-
-  private clearResolutionTimers(): void {
-    for (const [, timer] of this.resolutionTimers) clearTimeout(timer);
-    this.resolutionTimers.clear();
+    logger.warn("Paused");
   }
 
   async resume(): Promise<void> {
     if (!this.paused) return;
     this.paused = false;
-
-    // Cash can move while paused: positions opened earlier still settle. The
-    // manager keeps memory and database in step, so this only matters when the
-    // row changed underneath us, which is exactly what a wipe does.
     await this.portfolioManager.reload();
-
     await this.scanner.start();
-    this.cleanupTimer = setInterval(() => this.cleanupExpiredMarkets(), 10_000);
-
-    logger.info("System resumed — trading active");
+    this.cleanupTimer = setInterval(() => this.cleanupExpiredMarkets(), CLEANUP_INTERVAL_MS);
+    logger.info("Resumed");
   }
 
   /**
-   * Drop all in-memory trading state so the process matches an empty database.
-   *
-   * A wipe deletes the trade rows but the orchestrator would otherwise keep
-   * holding the positions they described. Those orphans still settle, and
-   * settling one credits cash against a balance that no longer exists, which
-   * silently corrupts the fresh portfolio. Everything tied to the old session
-   * has to go at the same moment the rows do.
-   *
-   * Markets are not re-fetched here. The scanner rediscovers them on resume,
-   * and because the price buffer survives, a window whose open is still in the
-   * buffer gets its strike back — something a process restart would lose.
+   * Drop all in-memory session state so nothing from a wiped session can act
+   * against the fresh portfolio. Markets are rediscovered on resume; the price
+   * buffer survives, so a window whose open is still buffered gets its strike.
    */
   resetSessionState(): void {
     this.clearResolutionTimers();
-
     const subscribed = [...this.tokenToMarket.keys()];
-    if (subscribed.length > 0) this.wsWatcher.unsubscribe(subscribed);
-
+    if (subscribed.length) this.wsWatcher.unsubscribe(subscribed);
     this.openPositions.clear();
-    this.positionsByMarket.clear();
-    this.positionsByToken.clear();
     this.inFlightTokenIds.clear();
     this.activeMarkets.clear();
     this.conditionIdMap.clear();
     this.tokenToMarket.clear();
-    this.pendingBtcFills.clear();
     this.cycleCount = 0;
-
     this.scanner.reset();
     this.strategyEngine.reset();
-
-    logger.warn(
-      { unsubscribedTokens: subscribed.length },
-      "Session state cleared",
-    );
+    logger.warn({ unsubscribedTokens: subscribed.length }, "Session state cleared");
   }
 
   isPaused(): boolean {
@@ -286,17 +173,13 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   getStats() {
-    const config = getConfig();
-    const rawSigma = this.btcWatcher.getRawSigma(config.strategy.sigmaWindowMs);
     return {
       running: this.running,
       paused: this.paused,
       activeMarkets: this.activeMarkets.size,
       openPositions: this.openPositions.size,
       cycleCount: this.cycleCount,
-      scanner: {
-        discoveredCount: this.scanner.getDiscoveredCount(),
-      },
+      scanner: { discoveredCount: this.scanner.getDiscoveredCount() },
       ws: this.wsWatcher.getStats(),
       strategy: this.strategyEngine.getStats(),
       btcConnected: this.btcWatcher.isConnected(),
@@ -305,26 +188,18 @@ export class MarketOrchestrator extends EventEmitter {
       btcPriceAgeMs: this.btcWatcher.getTwapAgeMs(),
       btcRawAgeMs: this.btcWatcher.getRawAgeMs(),
       btcPriceFresh: this.btcWatcher.isPriceFresh(),
-      rawSigma,
+      rawSigma: this.btcWatcher.getRawSigma(getConfig().strategy.sigmaWindowMs),
     };
   }
 
   getLiveMarkets() {
     const now = marketNow();
-    return Array.from(this.activeMarkets.values())
+    return [...this.activeMarkets.values()]
       .filter((m) => !m.resolved)
       .sort((a, b) => a.endDate.getTime() - b.endDate.getTime())
       .map((m) => {
-        const hasPosition = this.hasOpenPositionsForMarket(m.marketId);
-        const windowStartMs = m.endDate.getTime() - this.windowDurationMs;
-        // UPCOMING: window not yet open · ACTIVE: open · ENDED: awaiting oracle.
-        const status: "ACTIVE" | "ENDED" | "UPCOMING" =
-          m.endDate.getTime() <= now
-            ? "ENDED"
-            : windowStartMs <= now
-              ? "ACTIVE"
-              : "UPCOMING";
-
+        const endMs = m.endDate.getTime();
+        const windowStartMs = endMs - WINDOW_CONFIG.durationMs;
         return {
           marketId: m.marketId,
           question: m.question,
@@ -334,652 +209,455 @@ export class MarketOrchestrator extends EventEmitter {
           yesTokenId: m.yesTokenId,
           noTokenId: m.noTokenId,
           prices: { ...m.lastPrices },
-          status,
-          hasPosition,
-          btcPriceAtWindowStart: m.btcPriceAtWindowStart,
+          status: endMs <= now ? "ENDED" : windowStartMs <= now ? "ACTIVE" : "UPCOMING",
+          hasPosition: this.hasOpenPositions(m.marketId),
+          btcPriceAtWindowStart: m.strike,
         };
       });
   }
 
-  /** Live per-position observables for open trades (mirrors the trade rows). */
   getOpenPositionSnapshots() {
-    return Array.from(this.openPositions.values()).map((pos) => ({
+    const fraction = getConfig().strategy.stopLossFraction;
+    return [...this.openPositions.values()].map((pos) => ({
       tradeId: pos.tradeId,
       tokenId: pos.tokenId,
       marketId: pos.marketId,
       minPriceDuringPosition: pos.minBid,
-      stopLossPrice: stopTriggerPrice(pos.entryPrice, getConfig().strategy.stopLossFraction),
+      stopLossPrice: stopTriggerPrice(pos.entryPrice, fraction),
       remainingShares: pos.remainingShares,
     }));
   }
 
-  /** Total cost basis of all open positions (sum of actualCost), not mark-to-market. */
+  /** Cost basis of all open positions, not mark-to-market. */
   computeOpenPositionsValue(): number {
     let total = 0;
-    for (const pos of this.openPositions.values()) {
-      total += pos.actualCost;
-    }
+    for (const pos of this.openPositions.values()) total += pos.actualCost;
     return total;
   }
 
-  private trackPosition(pos: OpenPosition): void {
-    this.openPositions.set(pos.tradeId, pos);
-
-    let byMarket = this.positionsByMarket.get(pos.marketId);
-    if (!byMarket) {
-      byMarket = new Set();
-      this.positionsByMarket.set(pos.marketId, byMarket);
-    }
-    byMarket.add(pos.tradeId);
-
-    let byToken = this.positionsByToken.get(pos.tokenId);
-    if (!byToken) {
-      byToken = new Set();
-      this.positionsByToken.set(pos.tokenId, byToken);
-    }
-    byToken.add(pos.tradeId);
+  private hasOpenPositions(marketId: string): boolean {
+    for (const pos of this.openPositions.values()) if (pos.marketId === marketId) return true;
+    return false;
   }
 
-  private untrackPosition(tradeId: string): void {
-    const pos = this.openPositions.get(tradeId);
-    if (!pos) return;
-    this.openPositions.delete(tradeId);
-
-    const byMarket = this.positionsByMarket.get(pos.marketId);
-    if (byMarket) {
-      byMarket.delete(tradeId);
-      if (byMarket.size === 0) this.positionsByMarket.delete(pos.marketId);
-    }
-
-    const byToken = this.positionsByToken.get(pos.tokenId);
-    if (byToken) {
-      byToken.delete(tradeId);
-      if (byToken.size === 0) this.positionsByToken.delete(pos.tokenId);
-    }
+  private positionsOnToken(tokenId: string): OpenPosition[] {
+    return [...this.openPositions.values()].filter((p) => p.tokenId === tokenId);
   }
 
-  private hasOpenPositionsForMarket(marketId: string): boolean {
-    const set = this.positionsByMarket.get(marketId);
-    return set !== undefined && set.size > 0;
+  private stopCleanupTimer(): void {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = null;
   }
 
-  private registerMarketState(state: ActiveMarketState): void {
-    this.activeMarkets.set(state.marketId, state);
-    this.tokenToMarket.set(state.yesTokenId, state.marketId);
-    this.tokenToMarket.set(state.noTokenId, state.marketId);
-    if (state.conditionId) {
-      this.conditionIdMap.set(state.conditionId, state.marketId);
-    }
+  private clearResolutionTimers(): void {
+    for (const timer of this.resolutionTimers.values()) clearTimeout(timer);
+    this.resolutionTimers.clear();
   }
 
   private wireEvents(): void {
-    // Scanner → new market discovered
-    this.scanner.on("newMarket", async ({ market }) => {
+    this.scanner.on("newMarket", ({ market }) => {
       try {
-        await this.onNewMarket(market);
+        this.onNewMarket(market);
       } catch (err) {
-        logger.error(
-          { err, marketId: market?.id },
-          "Error handling new market",
-        );
+        logger.error({ err, marketId: market?.id }, "Error handling new market");
       }
     });
-
-    this.wsWatcher.on("bookUpdate", (ev: BookUpdateEvent) =>
-      this.onBookUpdate(ev),
-    );
-
-    this.wsWatcher.on("trade", (ev: TradeEvent) =>
-      this.strategyEngine.noteTrade(ev.tokenId, ev.timestamp),
-    );
-
-    this.wsWatcher.on("marketResolved", (ev: MarketResolvedEvent) =>
-      this.onMarketResolved(ev),
-    );
-
+    this.wsWatcher.on("bookUpdate", (ev: BookUpdateEvent) => this.onBookUpdate(ev));
+    this.wsWatcher.on("trade", (ev: TradeEvent) => this.onTrade(ev));
+    this.wsWatcher.on("marketResolved", (ev: MarketResolvedEvent) => {
+      this.onMarketResolved(ev).catch((err) => logger.error({ err }, "Error handling resolution"));
+    });
     this.btcWatcher.on("twapUpdate", (tick: BtcPriceData) => {
-      this.tryFillBtcWindowStart();
-      this.evaluateActiveMarkets(tick);
+      this.fillStrikes();
+      this.refreshForecasts(tick);
     });
-
     this.strategyEngine.on("opportunityDetected", (opp: MarketOpportunity) => {
-      this.onOpportunity(opp).catch((err) => {
-        logger.error(
-          { err, marketId: opp.marketId },
-          "Error handling opportunity",
-        );
-      });
+      this.onOpportunity(opp).catch((err) =>
+        logger.error({ err, marketId: opp.marketId }, "Error handling opportunity"),
+      );
     });
   }
 
-  /**
-   * Set the strike for any market whose window has opened. The strike is the
-   * settlement TWAP observed at the window open and nothing else, so a market
-   * whose open we did not see stays unstruck and untradeable.
-   */
-  private tryFillBtcWindowStart(): void {
-    if (this.pendingBtcFills.size === 0) return;
+  private activateMarket(params: {
+    marketId: string;
+    conditionId: string | null;
+    tokenIds: string[];
+    outcomes: string[];
+    question: string;
+    slug: string | null;
+    endDate: Date;
+    strike: number | null;
+    rawMarket: unknown;
+  }): void {
+    const state: ActiveMarketState = {
+      marketId: params.marketId,
+      conditionId: params.conditionId,
+      yesTokenId: params.tokenIds[0]!,
+      noTokenId: params.tokenIds[1]!,
+      outcomes: params.outcomes,
+      question: params.question,
+      slug: params.slug,
+      endDate: params.endDate,
+      strike: params.strike,
+      lastPrices: {},
+      summary: {
+        bursts: 0,
+        firstBurstTau: null,
+        lastBurstSide: null,
+        minBurstAsk: null,
+        minBurstAskTau: null,
+        lastSkipReason: null,
+        traded: false,
+      },
+      resolved: false,
+      rawMarket: params.rawMarket,
+    };
 
-    const nowMs = marketNow();
+    this.activeMarkets.set(state.marketId, state);
+    this.tokenToMarket.set(state.yesTokenId, state.marketId);
+    this.tokenToMarket.set(state.noTokenId, state.marketId);
+    if (state.conditionId) this.conditionIdMap.set(state.conditionId, state.marketId);
 
-    for (const marketId of this.pendingBtcFills) {
-      const state = this.activeMarkets.get(marketId);
-      if (!state || state.btcPriceAtWindowStart !== null) {
-        this.pendingBtcFills.delete(marketId);
-        continue;
-      }
+    params.tokenIds.forEach((tokenId, i) =>
+      this.strategyEngine.registerMarket(
+        state.marketId,
+        tokenId,
+        params.outcomes[i] ?? `Outcome${i}`,
+        state.endDate,
+        state.strike,
+      ),
+    );
+    this.wsWatcher.subscribe(params.tokenIds);
 
-      const windowStartMs = state.endDate.getTime() - this.windowDurationMs;
-      if (nowMs < windowStartMs) continue;
-
-      const price = this.btcWatcher.getTwapAt(windowStartMs);
-      if (price === null) continue;
-
-      state.btcPriceAtWindowStart = price;
-      this.pendingBtcFills.delete(marketId);
-
-      if (state.targetPrice === null) {
-        state.targetPrice = price;
-        this.strategyEngine.updateStrike(state.yesTokenId, price);
-        this.strategyEngine.updateStrike(state.noTokenId, price);
-      }
-
-      logger.info(
-        { marketId, btcPriceAtWindowStart: price },
-        "Window start price set",
-      );
-    }
+    logger.info(
+      { marketId: state.marketId, slug: state.slug, endDate: state.endDate.toISOString(), strike: state.strike },
+      "Market activated",
+    );
   }
 
-  private async onNewMarket(market: any): Promise<void> {
-    if (this.paused) return;
-    if (this.activeMarkets.has(market.id)) return;
+  private onNewMarket(market: any): void {
+    if (this.paused || this.activeMarkets.has(market.id)) return;
 
     const tokenIds = PolymarketClient.parseClobTokenIds(market);
     const outcomes = PolymarketClient.parseOutcomes(market);
-    // The strike is the window-open TWAP and nothing else, so it starts unset
-    // and is filled by tryFillBtcWindowStart once that observation arrives.
-    const targetPrice = null;
-
     if (tokenIds.length < 2 || outcomes.length < 2) {
-      logger.warn(
-        { marketId: market.id },
-        "Market missing token IDs or outcomes",
-      );
+      logger.warn({ marketId: market.id }, "Market missing token IDs or outcomes");
       return;
     }
-
     const endDate = market.endDate ? new Date(market.endDate) : new Date();
+    if (endDate.getTime() < marketNow()) return;
 
-    // Gamma can return old unresolved markets; skip ones already expired.
-    if (endDate.getTime() < marketNow()) {
-      logger.debug(
-        { marketId: market.id, endDate: endDate.toISOString() },
-        "Skipping expired market",
-      );
-      return;
-    }
-
-    const state: ActiveMarketState = {
+    this.activateMarket({
       marketId: market.id,
       conditionId: market.conditionId ?? null,
-      yesTokenId: tokenIds[0]!,
-      noTokenId: tokenIds[1]!,
+      tokenIds,
+      outcomes,
       question: market.question ?? "",
       slug: market.slug ?? null,
       endDate,
-      targetPrice,
-      btcPriceAtWindowStart: null,
-      outcomes,
-      lastPrices: {},
-      summary: emptySummary(),
-      subscribedWs: false,
-      resolved: false,
+      strike: null,
       rawMarket: market,
-    };
-
-    this.registerMarketState(state);
-    this.pendingBtcFills.add(market.id);
-
-    for (let i = 0; i < tokenIds.length; i++) {
-      this.strategyEngine.registerMarket(
-        market.id,
-        tokenIds[i]!,
-        outcomes[i] ?? `Outcome${i}`,
-        endDate,
-        targetPrice,
-      );
-    }
-
-    this.wsWatcher.subscribe(tokenIds);
-    state.subscribedWs = true;
-
-    logger.info(
-      {
-        marketId: market.id,
-        question: market.question,
-        endDate: endDate.toISOString(),
-        targetPrice,
-        tokens: tokenIds.length,
-      },
-      "New market activated",
-    );
+    });
   }
 
-  /** Executable state changed: refresh prices, re-evaluate entry, check stops. */
+  private async loadActiveMarkets(): Promise<void> {
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const rows = await getDb()
+      .select()
+      .from(schema.markets)
+      .where(
+        and(
+          eq(schema.markets.active, true),
+          eq(schema.markets.windowType, WINDOW_CONFIG.category),
+          gte(schema.markets.endDate, cutoff),
+        ),
+      )
+      .orderBy(desc(schema.markets.endDate))
+      .limit(50);
+
+    const staleBefore = marketNow() - 30 * 60 * 1000;
+    for (const row of rows) {
+      if (this.activeMarkets.has(row.id)) continue;
+      const tokenIds = (row.clobTokenIds as string[] | null) ?? [];
+      const outcomes = (row.outcomes as string[] | null) ?? [];
+      if (tokenIds.length < 2 || outcomes.length < 2) continue;
+      const endDate = row.endDate ? new Date(row.endDate) : new Date();
+      if (endDate.getTime() < staleBefore && !this.hasOpenPositions(row.id)) continue;
+
+      this.activateMarket({
+        marketId: row.id,
+        conditionId: row.conditionId ?? null,
+        tokenIds,
+        outcomes,
+        question: row.question ?? "",
+        slug: row.slug ?? null,
+        endDate,
+        strike: row.targetPrice ? parseFloat(row.targetPrice) : null,
+        rawMarket: row.metadata,
+      });
+    }
+  }
+
+  private async loadOpenPositions(): Promise<void> {
+    const rows = await loadOpenTradesWithMarkets();
+    for (const { trade, marketEndDate } of rows) {
+      const shares = parseFloat(trade.entryShares);
+      this.openPositions.set(trade.id, {
+        tradeId: trade.id,
+        marketId: trade.marketId ?? "",
+        tokenId: trade.tokenId ?? "",
+        outcomeLabel: trade.outcomeLabel ?? "",
+        entryPrice: parseFloat(trade.entryPrice),
+        entryShares: shares,
+        actualCost: parseFloat(trade.actualCost ?? "0"),
+        marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
+        minBid: parseFloat(trade.minPriceDuringPosition ?? trade.entryPrice),
+        remainingShares: shares,
+        exitGross: 0,
+        exitFees: 0,
+        stopTriggered: false,
+      });
+      if (trade.marketId) this.scheduleSettlementWatch(trade.marketId);
+    }
+    if (rows.length) logger.info({ count: rows.length }, "Loaded open positions");
+  }
+
+  /** The strike is the settlement TWAP observed at the window open, nothing else. */
+  private fillStrikes(): void {
+    const now = marketNow();
+    for (const state of this.activeMarkets.values()) {
+      if (state.strike !== null) continue;
+      const windowStartMs = state.endDate.getTime() - WINDOW_CONFIG.durationMs;
+      if (now < windowStartMs) continue;
+      const price = this.btcWatcher.getTwapAt(windowStartMs);
+      if (price === null) continue;
+      state.strike = price;
+      this.strategyEngine.updateStrike(state.yesTokenId, price);
+      this.strategyEngine.updateStrike(state.noTokenId, price);
+      logger.info({ marketId: state.marketId, strike: price }, "Strike set");
+    }
+  }
+
   private onBookUpdate({ tokenId, bestBid, bestAsk }: BookUpdateEvent): void {
-    if (bestBid === null || bestAsk === null) return; // one-sided book: not executable
+    if (bestBid === null || bestAsk === null) return;
 
     const marketId = this.tokenToMarket.get(tokenId);
-    if (marketId) {
-      const state = this.activeMarkets.get(marketId);
-      if (state) {
-        // Track while the window is live; afterwards freeze until settlement,
-        // but still seed once so a restart mid-window isn't left blank.
-        const live = state.endDate.getTime() > marketNow();
-        if (live || state.lastPrices[tokenId] === undefined) {
-          state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
-        }
-      }
+    const state = marketId ? this.activeMarkets.get(marketId) : undefined;
+    // Frozen after the window ends, but seeded once so a restart mid-window is not blank.
+    if (state && (state.endDate.getTime() > marketNow() || !state.lastPrices[tokenId])) {
+      state.lastPrices[tokenId] = { bid: bestBid, ask: bestAsk };
     }
 
     this.strategyEngine.updateQuote(tokenId, bestBid, bestAsk);
 
-    this.trackMinBid(tokenId, bestBid);
-    this.checkStopLoss(tokenId, bestBid);
-  }
-
-  /**
-   * Score every live market on each settlement tick. Driving evaluation off the
-   * price feed rather than off book updates keeps the cadence steady: the model
-   * changes every second whether or not anyone quotes.
-   */
-  private evaluateActiveMarkets(tick: BtcPriceData): void {
-    if (this.paused) return;
-
-    const config = getConfig();
-    if (this.btcWatcher.getRawAgeMs() > config.strategy.maxRawStalenessMs) return;
-
-    const rawSigma = this.btcWatcher.getRawSigma(config.strategy.sigmaWindowMs);
-    if (rawSigma === null || rawSigma <= 0) return;
-
-    // Spot must be read at the TWAP's own observation time. Both feeds lag by
-    // about two seconds, and pairing a fresher spot with an older TWAP breaks
-    // the identity the forecast rests on.
-    const anchorMs = tick.timestamp;
-    const rawAtAnchor = this.btcWatcher.getRawAt(anchorMs);
-    if (rawAtAnchor === null) return;
-
-    for (const state of this.activeMarkets.values()) {
-      if (state.resolved || state.targetPrice === null) continue;
-
-      const endMs = state.endDate.getTime();
-      const secondsToEnd = (endMs - marketNow()) / 1000;
-      if (
-        secondsToEnd > config.strategy.entryWindowOpenSeconds ||
-        secondsToEnd < config.strategy.entryWindowCloseSeconds
-      ) {
-        continue;
+    const now = marketNow();
+    const fraction = getConfig().strategy.stopLossFraction;
+    for (const pos of this.positionsOnToken(tokenId)) {
+      // Past the window end the book is thin and settlement decides; the stop never fires there.
+      if (pos.marketEndDate.getTime() <= now) continue;
+      if (bestBid < pos.minBid) {
+        pos.minBid = bestBid;
+        updateTradeMinPrice(pos.tradeId, bestBid.toFixed(6)).catch(() => {});
       }
-
-      const { fromMs, toMs } = rollingOutRange(anchorMs, endMs);
-      const rollingOutMean = this.btcWatcher.getRawMean(fromMs, toMs);
-      if (rollingOutMean === null) continue;
-
-      const forecast = forecastSettlement({
-        anchorMs,
-        endMs,
-        strike: state.targetPrice,
-        twapNow: tick.price,
-        rawNow: rawAtAnchor,
-        rollingOutMean,
-        rawSigma,
-        floorMultiplier: config.strategy.decidedFloorMultiplier,
-        sdMultiple: config.strategy.decidedSdMultiple,
+      if (pos.stopTriggered || bestBid > stopTriggerPrice(pos.entryPrice, fraction)) continue;
+      pos.stopTriggered = true;
+      logger.warn({ tradeId: pos.tradeId, bestBid, entryPrice: pos.entryPrice }, "Stop triggered");
+      this.submitStopLossExit(pos).catch((err) => {
+        logger.error({ err, tradeId: pos.tradeId }, "Stop-loss exit failed");
+        pos.stopTriggered = false;
       });
-      if (!forecast) continue;
-
-      for (const tokenId of [state.yesTokenId, state.noTokenId]) {
-        const evaluation = this.strategyEngine.evaluate(tokenId, forecast);
-        if (evaluation) this.recordEvaluation(state, evaluation);
-      }
     }
   }
 
   /**
-   * Fold one evaluation into the window's summary. Only the decided side is
-   * interesting: how long the window sat decided, and the cheapest ask the book
-   * offered on that side while it did. That number, across every window traded
-   * or not, is what says whether the price cap is where the opportunities are.
+   * Spot must be read at the TWAP's own observation time. Both feeds lag by
+   * about two seconds, and pairing a fresher spot with an older TWAP breaks
+   * the identity the forecast rests on.
    */
-  private recordEvaluation(state: ActiveMarketState, evaluation: Evaluation): void {
-    const s = state.summary;
-    const f = evaluation.forecast;
-    if (evaluation.skipReason === "outside_entry_window") return;
-    if (f.decidedSide !== evaluation.outcomeLabel) return;
+  private refreshForecasts(tick: BtcPriceData): void {
+    const config = getConfig();
+    if (this.btcWatcher.getRawAgeMs() > config.strategy.maxRawStalenessMs) return;
+    const rawSigma = this.btcWatcher.getRawSigma(config.strategy.sigmaWindowMs);
+    if (!rawSigma) return;
+    const anchorMs = tick.timestamp;
+    const rawNow = this.btcWatcher.getRawAt(anchorMs);
+    if (rawNow === null) return;
 
-    s.decidedSeconds++;
-    s.decidedSide = f.decidedSide;
-    if (s.firstDecidedTau === null) s.firstDecidedTau = f.secondsToEnd;
-    if (evaluation.bestAsk !== null && evaluation.bestAsk > 0) {
-      if (s.minDecidedAsk === null || evaluation.bestAsk < s.minDecidedAsk) {
-        s.minDecidedAsk = evaluation.bestAsk;
-        s.minDecidedAskTau = f.secondsToEnd;
-      }
+    for (const state of this.activeMarkets.values()) {
+      const endMs = state.endDate.getTime();
+      if (state.resolved || state.strike === null || endMs <= anchorMs) continue;
+      const { fromMs, toMs } = rollingOutRange(anchorMs, endMs);
+      const rollingOutMean = this.btcWatcher.getRawMean(fromMs, toMs);
+      if (rollingOutMean === null) continue;
+      const forecast = forecastSettlement({
+        anchorMs,
+        endMs,
+        strike: state.strike,
+        twapNow: tick.price,
+        rawNow,
+        rollingOutMean,
+        rawSigma,
+      });
+      if (forecast) this.strategyEngine.updateForecast(state.marketId, forecast);
+    }
+  }
+
+  private onTrade(ev: TradeEvent): void {
+    const evaluation = this.strategyEngine.noteTrade(
+      ev.tokenId,
+      ev.takerSide,
+      this.paused ? 0 : ev.size,
+      ev.timestamp,
+    );
+    if (!evaluation || evaluation.skipReason === "outside_entry_window") return;
+    const marketId = this.tokenToMarket.get(ev.tokenId);
+    const s = marketId ? this.activeMarkets.get(marketId)?.summary : undefined;
+    if (!s) return;
+
+    s.bursts++;
+    s.lastBurstSide = evaluation.outcomeLabel;
+    s.firstBurstTau ??= evaluation.secondsToEnd;
+    if (evaluation.bestAsk && (s.minBurstAsk === null || evaluation.bestAsk < s.minBurstAsk)) {
+      s.minBurstAsk = evaluation.bestAsk;
+      s.minBurstAskTau = evaluation.secondsToEnd;
     }
     s.lastSkipReason = evaluation.skipReason;
     if (evaluation.skipReason === null) s.traded = true;
   }
 
-  /** Lowest executable bid seen while a position is open (observational only). */
-  private trackMinBid(tokenId: string, bestBid: number): void {
-    const tradeIds = this.positionsByToken.get(tokenId);
-    if (!tradeIds) return;
-    const now = marketNow();
-    for (const tradeId of tradeIds) {
-      const pos = this.openPositions.get(tradeId);
-      if (!pos || bestBid >= pos.minBid) continue;
-      // The same cutoff the stop uses. Past the window end the book is thin and
-      // meaningless, and recording it would put values below the stop level on
-      // trades the stop could never have fired for.
-      if (pos.marketEndDate.getTime() <= now) continue;
-      pos.minBid = bestBid;
-      updateTradeMinPrice(tradeId, bestBid.toFixed(6)).catch((err) =>
-        logger.debug({ err, tradeId }, "Failed to persist min price"),
-      );
-    }
-  }
-
-  private checkStopLoss(tokenId: string, bestBid: number): void {
-    const tradeIds = this.positionsByToken.get(tokenId);
-    if (!tradeIds) return;
-
-    const now = marketNow();
-    for (const tradeId of tradeIds) {
-      const pos = this.openPositions.get(tradeId);
-      if (!pos || pos.stopTriggered) continue;
-      if (pos.marketEndDate.getTime() <= now) continue; // settled at resolution
-
-      const stopPrice = stopTriggerPrice(pos.entryPrice, getConfig().strategy.stopLossFraction);
-      if (bestBid > stopPrice) continue;
-
-      pos.stopTriggered = true;
-      logger.warn(
-        {
-          tradeId,
-          entryPrice: pos.entryPrice.toFixed(4),
-          bestBid: bestBid.toFixed(4),
-          stopLevel: stopPrice.toFixed(4),
-        },
-        "Stop-loss breached — submitting market exit",
-      );
-      this.submitStopLossExit(tradeId, pos).catch((err) => {
-        logger.error({ err, tradeId }, "Stop-loss exit failed");
-        const p = this.openPositions.get(tradeId);
-        if (p) p.stopTriggered = false;
-      });
-    }
-  }
-
   private async onMarketResolved(ev: MarketResolvedEvent): Promise<void> {
-    const { conditionId, winningAssetId, winningOutcome } = ev;
-
-    logger.info(
-      { conditionId, winningAssetId, winningOutcome },
-      "Market resolved via WebSocket",
-    );
-
-    const marketId = this.conditionIdMap.get(conditionId);
+    let marketId = this.conditionIdMap.get(ev.conditionId);
     if (!marketId) {
-      // Fallback to a DB lookup if the in-memory map missed it.
-      const db = getDb();
-      const [row] = await db
-        .select()
+      const [row] = await getDb()
+        .select({ id: schema.markets.id })
         .from(schema.markets)
-        .where(eq(schema.markets.conditionId, conditionId))
+        .where(eq(schema.markets.conditionId, ev.conditionId))
         .limit(1);
-      if (!row) return;
-
-      const state = this.activeMarkets.get(row.id);
-      if (!state || state.resolved) return;
-      state.resolved = true;
-      await this.settleMarketPositions(row.id, winningAssetId, winningOutcome);
-      return;
+      marketId = row?.id;
     }
-
-    const state = this.activeMarkets.get(marketId);
+    const state = marketId ? this.activeMarkets.get(marketId) : undefined;
     if (!state || state.resolved) return;
     state.resolved = true;
-    await this.settleMarketPositions(marketId, winningAssetId, winningOutcome);
+    await this.settleMarketPositions(state.marketId, ev.winningAssetId, ev.winningOutcome);
   }
 
   private async onOpportunity(opp: MarketOpportunity): Promise<void> {
-    if (this.paused) return;
-
-    if (this.inFlightTokenIds.has(opp.tokenId)) {
-      logger.debug(
-        { tokenId: opp.tokenId, marketId: opp.marketId },
-        "onOpportunity skipped — already in-flight for this token",
-      );
-      return;
-    }
+    if (this.paused || this.inFlightTokenIds.has(opp.tokenId)) return;
     this.inFlightTokenIds.add(opp.tokenId);
-
     const config = getConfig();
+    const release = () => this.strategyEngine.releaseMarket(opp.marketId);
 
     try {
-      // Polymarket holds taker orders on crypto up/down markets for 250 ms and
-      // revalidates before matching. A stale ask that a maker pulls in that
-      // window is not ours, so the fill must come from the book as it stands
-      // after the hold, not the one that triggered the entry.
+      // Polymarket holds taker orders for its delay and revalidates before
+      // matching, so the fill comes from the book after the hold, not the one
+      // that triggered the entry.
       await sleep(config.strategy.executionLatencyMs);
-      if (this.paused) {
-        this.strategyEngine.releaseMarket(opp.marketId);
-        return;
+      if (this.paused) return release();
+
+      const book = this.wsWatcher.getBook(opp.tokenId);
+      if (!book?.asks.length) return release();
+
+      const execution = simulateLimitBuy(book, FIXED_POSITION_BUDGET_USD, config.strategy.maxEntryPrice);
+      if (execution.totalShares <= 0 || execution.belowMinimumOrderSize) {
+        logger.warn(
+          { tokenId: opp.tokenId, filled: execution.totalShares, bestAsk: this.wsWatcher.getBestAsk(opp.tokenId) },
+          "No usable fill",
+        );
+        return release();
       }
 
-      const orderbook = this.wsWatcher.getBook(opp.tokenId);
-      if (!orderbook || orderbook.asks.length === 0) {
-        logger.warn(
-          { tokenId: opp.tokenId },
-          "No executable asks — will retry on next book update",
-        );
-        this.strategyEngine.releaseMarket(opp.marketId);
-        return;
-      }
-      const bestAskPrice =
-        this.wsWatcher.getBestAsk(opp.tokenId) ?? opp.bestAsk;
+      const state = this.activeMarkets.get(opp.marketId);
       const entryBid = this.wsWatcher.getBestBid(opp.tokenId) ?? opp.bestBid;
-
-      const positionBudget = FIXED_POSITION_BUDGET_USD;
-
-      const execution = simulateLimitBuy(
-        orderbook,
-        positionBudget,
-        config.strategy.maxEntryPrice,
-      );
-
-      if (execution.totalShares <= 0) {
-        logger.warn(
-          {
-            tokenId: opp.tokenId,
-            maxEntryPrice: config.strategy.maxEntryPrice,
-            bestAsk: bestAskPrice,
-          },
-          "No fill — all asks above maxEntryPrice; will retry",
-        );
-        this.strategyEngine.releaseMarket(opp.marketId);
-        return;
-      }
-
-      if (execution.belowMinimumOrderSize) {
-        logger.warn(
-          {
-            tokenId: opp.tokenId,
-            filled: execution.totalShares,
-            minOrderSize: execution.minOrderSize,
-          },
-          `Rejecting: filled ${execution.totalShares.toFixed(2)} shares < min_order_size ${execution.minOrderSize}`,
-        );
-        this.strategyEngine.releaseMarket(opp.marketId);
-        return;
-      }
-
-      const expectedProfit = calculateWinProfit(
-        execution.averagePrice,
-        execution.totalShares,
-        execution.fees,
-      );
-
-      if (expectedProfit < 0.001) {
-        logger.debug(
-          { expectedProfit, tokenId: opp.tokenId },
-          "Expected profit too small",
-        );
-        return;
-      }
-
-      // Last check before any money moves: a wipe or pause can land while the
-      // book lookup and sizing above are running.
-      if (this.paused) {
-        this.strategyEngine.releaseMarket(opp.marketId);
-        return;
-      }
-
       const actualCost = execution.netCost;
       await this.portfolioManager.deductCash(actualCost);
 
-      const fillStatus = execution.isPartialFill ? "PARTIAL" : "FULL";
-
-      const marketState = this.activeMarkets.get(opp.marketId);
-      if (marketState && marketState.rawMarket) {
-        const tokenIds = PolymarketClient.parseClobTokenIds(
-          marketState.rawMarket,
-        );
-        const outcomes = PolymarketClient.parseOutcomes(marketState.rawMarket);
-
+      if (state) {
         await insertMarketIfNew(opp.marketId, {
-          conditionId: marketState.conditionId ?? "",
-          slug: marketState.slug ?? undefined,
-          question: marketState.question ?? undefined,
-          clobTokenIds: tokenIds,
-          outcomes,
-          windowType: WINDOW_CONFIG.category,
-          category: "Crypto",
-          endDate: marketState.endDate.toISOString(),
-          targetPrice: marketState.targetPrice,
-          active: true,
-          metadata: marketState.rawMarket,
+          conditionId: state.conditionId,
+          slug: state.slug,
+          question: state.question,
+          clobTokenIds: [state.yesTokenId, state.noTokenId],
+          outcomes: state.outcomes,
+          endDate: state.endDate.toISOString(),
+          targetPrice: state.strike,
+          metadata: state.rawMarket,
         });
       }
 
-      const entryTs = new Date(marketNow());
-      const tradeRow = await createSimulatedTrade({
+      const trade = await createSimulatedTrade({
         marketId: opp.marketId,
         tokenId: opp.tokenId,
         outcomeLabel: opp.outcomeLabel,
-        entryTs,
+        entryTs: new Date(marketNow()),
         windowType: WINDOW_CONFIG.category,
         entryPrice: execution.averagePrice.toFixed(6),
         entryShares: execution.totalShares.toFixed(6),
-        positionBudget: positionBudget.toFixed(6),
+        positionBudget: FIXED_POSITION_BUDGET_USD.toFixed(6),
         actualCost: actualCost.toFixed(6),
         entryFees: execution.fees.toFixed(6),
-        fillStatus,
+        fillStatus: execution.isPartialFill ? "PARTIAL" : "FULL",
         twapAtEntry: opp.forecast.twapNow,
         rawAtEntry: opp.forecast.rawNow,
         strike: opp.strike,
         forecastSettlement: opp.forecast.expected,
         forecastMarginUsd: opp.forecast.margin,
         forecastSdUsd: opp.forecast.sd,
-        decidedFloorUsd: opp.forecast.floor,
+        flowPrints: opp.burst.prints,
+        flowShares: opp.burst.shares,
         secondsToEnd: opp.secondsToEnd,
         minPriceDuringPosition: entryBid.toFixed(6),
       });
-      const tradeId = tradeRow!.id;
 
-      const market = this.activeMarkets.get(opp.marketId);
-      this.trackPosition({
-        tradeId,
+      this.openPositions.set(trade.id, {
+        tradeId: trade.id,
         marketId: opp.marketId,
         tokenId: opp.tokenId,
         outcomeLabel: opp.outcomeLabel,
         entryPrice: execution.averagePrice,
         entryShares: execution.totalShares,
-        fees: execution.fees,
         actualCost,
-        marketEndDate: market?.endDate ?? new Date(),
+        marketEndDate: state?.endDate ?? new Date(),
         minBid: entryBid,
         remainingShares: execution.totalShares,
         exitGross: 0,
         exitFees: 0,
         stopTriggered: false,
       });
-
       this.scheduleSettlementWatch(opp.marketId);
-
-      await logAudit(
-        "info",
-        "TRADE_OPENED",
-        `Trade ${tradeId} opened for ${opp.outcomeLabel}`,
-        {
-          tradeId,
-          tokenId: opp.tokenId,
-          outcome: opp.outcomeLabel,
-          avgPrice: execution.averagePrice,
-          shares: execution.totalShares,
-          positionBudget,
-          actualCost,
-          expectedProfit,
-          strike: opp.strike,
-          twapNow: opp.forecast.twapNow,
-          rawNow: opp.forecast.rawNow,
-          forecastSettlement: opp.forecast.expected,
-          forecastMargin: opp.forecast.margin,
-          forecastSd: opp.forecast.sd,
-          decidedFloor: opp.forecast.floor,
-          secondsToEnd: opp.secondsToEnd,
-          cashRemaining: this.portfolioManager.getCashBalance(),
-        },
-      );
-
       this.cycleCount++;
-      this.emit("tradeOpened", {
-        tradeId,
-        trade: tradeRow,
-        ...opp,
-        execution,
-        expectedProfit,
-      });
 
+      await logAudit("info", "TRADE_OPENED", `Trade ${trade.id} opened for ${opp.outcomeLabel}`, {
+        tradeId: trade.id,
+        tokenId: opp.tokenId,
+        outcome: opp.outcomeLabel,
+        avgPrice: execution.averagePrice,
+        shares: execution.totalShares,
+        actualCost,
+        strike: opp.strike,
+        forecastSettlement: opp.forecast.expected,
+        forecastMargin: opp.forecast.margin,
+        forecastSd: opp.forecast.sd,
+        forecastZ: opp.forecast.zScore,
+        burstPrints: opp.burst.prints,
+        burstShares: opp.burst.shares,
+        secondsToEnd: opp.secondsToEnd,
+        cashRemaining: this.portfolioManager.getCashBalance(),
+      });
+      this.emit("tradeOpened", { tradeId: trade.id, trade, ...opp, execution });
       logger.info(
         {
-          tradeId,
-          marketId: opp.marketId,
+          tradeId: trade.id,
           outcome: opp.outcomeLabel,
           avgPrice: execution.averagePrice.toFixed(4),
           shares: execution.totalShares.toFixed(2),
-          budget: positionBudget.toFixed(2),
-          actualCost: actualCost.toFixed(4),
-          fees: execution.fees.toFixed(4),
-          expectedProfit: expectedProfit.toFixed(4),
-          margin: opp.forecast.margin.toFixed(2),
-          floor: opp.forecast.floor.toFixed(2),
-          sd: opp.forecast.sd.toFixed(2),
-          cashRemaining: this.portfolioManager.getCashBalance().toFixed(2),
+          burst: `${opp.burst.prints}x${opp.burst.shares.toFixed(0)}sh`,
+          z: opp.forecast.zScore.toFixed(2),
         },
-        "📈 Simulated trade opened",
+        "Trade opened",
       );
     } catch (error) {
-      logger.error(
-        { error, marketId: opp.marketId, tokenId: opp.tokenId },
-        "Failed to execute simulated trade",
-      );
-      logAudit(
-        "error",
-        "SYSTEM",
-        `Failed to execute simulated trade for market ${opp.marketId}: ${error instanceof Error ? error.message : String(error)}`,
-      ).catch(() => {});
+      logger.error({ error, marketId: opp.marketId }, "Failed to execute simulated trade");
+      logAudit("error", "SYSTEM", `Trade failed for market ${opp.marketId}: ${errorMessage(error)}`).catch(() => {});
     } finally {
       this.inFlightTokenIds.delete(opp.tokenId);
     }
@@ -987,30 +665,19 @@ export class MarketOrchestrator extends EventEmitter {
 
   /**
    * The trigger only decides when to sell. The fill is whatever the bid side
-   * holds once the order lands, walked to the bottom of the book with no limit,
-   * so a collapsed book produces a near-total loss rather than a tidy exit.
+   * holds once the order lands, walked to the bottom of the book with no limit.
+   * A book too thin for the whole position leaves a remainder that stays open
+   * with the trigger re-armed.
    */
-  private async submitStopLossExit(
-    tradeId: string,
-    pos: OpenPosition,
-  ): Promise<void> {
+  private async submitStopLossExit(pos: OpenPosition): Promise<void> {
     try {
-      const config = getConfig();
-      await sleep(config.strategy.executionLatencyMs);
-
-      // The window can resolve while the order is in flight. Settlement will
-      // have already paid out and closed the row, so selling now would book the
-      // proceeds twice.
-      if (!this.openPositions.has(tradeId)) return;
+      await sleep(getConfig().strategy.executionLatencyMs);
+      // Settlement may have closed the row while the order was in flight.
+      if (!this.openPositions.has(pos.tradeId)) return;
 
       const book = this.wsWatcher.getBook(pos.tokenId);
-      const sell = book
-        ? simulateLimitSell(book, pos.remainingShares, 0)
-        : null;
-
+      const sell = book ? simulateLimitSell(book, pos.remainingShares, 0) : null;
       if (!sell || sell.totalSharesSold <= 0) {
-        // Nothing on the bid side to hit. Re-arm and try again on the next tick.
-        logger.warn({ tradeId }, "Stop-loss unfilled — no executable bids");
         pos.stopTriggered = false;
         return;
       }
@@ -1021,446 +688,149 @@ export class MarketOrchestrator extends EventEmitter {
       const proceeds = sell.totalRevenue - sell.fees;
       if (proceeds > 0) await this.portfolioManager.addCash(proceeds);
 
-      // A book too thin to absorb the whole position leaves a remainder. It
-      // stays open and the trigger re-arms, so the rest is sold as liquidity
-      // returns, or redeemed at settlement if the window closes first.
       if (pos.remainingShares > 1e-6) {
         pos.stopTriggered = false;
         logger.warn(
-          {
-            tradeId,
-            sold: sell.totalSharesSold.toFixed(4),
-            remaining: pos.remainingShares.toFixed(4),
-            fill: sell.averagePrice.toFixed(4),
-          },
-          "Stop-loss partially filled — remainder still open",
+          { tradeId: pos.tradeId, sold: sell.totalSharesSold, remaining: pos.remainingShares },
+          "Stop-loss partially filled",
         );
         return;
       }
-
-      await this.closeStoppedPosition(tradeId, pos);
+      await this.closePosition(pos, 0, "STOP_LOSS", "STOP_LOSS");
     } catch (error) {
-      logger.error({ error, tradeId }, "Stop-loss execution error");
-      logAudit(
-        "error",
-        "SYSTEM",
-        `Stop-loss error for trade ${tradeId}: ${error instanceof Error ? error.message : String(error)}`,
-      ).catch(() => {});
-      const position = this.openPositions.get(tradeId);
-      if (position) position.stopTriggered = false;
+      logger.error({ error, tradeId: pos.tradeId }, "Stop-loss execution error");
+      logAudit("error", "SYSTEM", `Stop-loss error for trade ${pos.tradeId}: ${errorMessage(error)}`).catch(() => {});
+      pos.stopTriggered = false;
     }
   }
 
-  /** Write the trade row once a stopped position is fully out of the book. */
-  private async closeStoppedPosition(
-    tradeId: string,
+  private async closePosition(
     pos: OpenPosition,
+    redemption: number,
+    exitReason: "RESOLUTION" | "STOP_LOSS",
+    auditCategory: "STOP_LOSS" | "TRADE_RESOLVED",
+    winningOutcome?: string,
   ): Promise<void> {
-    const exitPrice = pos.exitGross / pos.entryShares;
-    const pnl = pos.exitGross - pos.exitFees - pos.actualCost;
+    const pnl = pos.exitGross - pos.exitFees + redemption - pos.actualCost;
     const isWin = pnl > 0;
+    const exitPrice = (pos.exitGross + redemption) / pos.entryShares;
 
-    await resolveTrade(
-      tradeId,
-      isWin ? "WIN" : "LOSS",
-      pnl.toFixed(6),
-      exitPrice.toFixed(6),
-      { exitReason: "STOP_LOSS" },
-    );
-    this.untrackPosition(tradeId);
+    const trade = await resolveTrade(pos.tradeId, isWin ? "WIN" : "LOSS", pnl.toFixed(6), exitPrice.toFixed(6), exitReason);
+    this.openPositions.delete(pos.tradeId);
 
     await logAudit(
-      "warn",
-      "STOP_LOSS",
-      `Stop-loss for trade ${tradeId}: exit @ ${exitPrice.toFixed(4)}, PnL ${pnl.toFixed(4)}`,
+      isWin ? "info" : "warn",
+      auditCategory,
+      `Trade ${pos.tradeId} closed: ${isWin ? "WIN" : "LOSS"} via ${exitReason}`,
       {
-        tradeId,
-        tokenId: pos.tokenId,
-        entryPrice: pos.entryPrice,
-        stopLevel: stopTriggerPrice(pos.entryPrice, getConfig().strategy.stopLossFraction),
-        exitPrice,
-        exitFees: pos.exitFees,
+        tradeId: pos.tradeId,
+        outcome: isWin ? "WIN" : "LOSS",
         pnl,
-        lossFraction: pnl < 0 ? -pnl / pos.actualCost : 0,
+        exitPrice,
+        exitReason,
+        winningOutcome: winningOutcome ?? null,
+        sharesRedeemed: redemption > 0 ? pos.remainingShares : 0,
+        stopProceeds: pos.exitGross - pos.exitFees,
+        cashBalance: this.portfolioManager.getCashBalance(),
       },
     );
-    logger.info(
-      {
-        tradeId,
-        marketId: pos.marketId,
-        entryPrice: pos.entryPrice.toFixed(4),
-        exitPrice: exitPrice.toFixed(4),
-        pnl: pnl.toFixed(4),
-      },
-      "🛑 Stop-loss executed",
-    );
+    logger.info({ tradeId: pos.tradeId, exitReason, pnl: pnl.toFixed(4) }, isWin ? "Trade won" : "Trade lost");
+    this.emit("tradeResolved", { tradeId: pos.tradeId, isWin, pnl, exitPrice, trade });
+  }
 
-    this.emit("tradeResolved", { tradeId, isWin, pnl, exitPrice, trade: null });
+  private async settleMarketPositions(marketId: string, winningTokenId: string, winningOutcome: string): Promise<void> {
+    for (const pos of [...this.openPositions.values()]) {
+      if (pos.marketId !== marketId || !this.openPositions.has(pos.tradeId)) continue;
+      const redemption = pos.tokenId === winningTokenId ? pos.remainingShares : 0;
+      if (redemption > 0) await this.portfolioManager.addCash(redemption);
+      await this.closePosition(
+        pos,
+        redemption,
+        pos.exitGross > 0 ? "STOP_LOSS" : "RESOLUTION",
+        "TRADE_RESOLVED",
+        winningOutcome,
+      );
+    }
+    if (!this.hasOpenPositions(marketId)) this.cleanupMarket(marketId);
   }
 
   private scheduleSettlementWatch(marketId: string): void {
     if (this.resolutionTimers.has(marketId)) return;
-
-    const FAST_INTERVAL = 5_000;
-    const SLOW_INTERVAL = 30_000;
-    const FAST_PHASE_MS = 2 * 60_000;
-    const startTime = Date.now();
-
-    const stop = () => {
-      const t = this.resolutionTimers.get(marketId);
-      if (t) clearTimeout(t);
-      this.resolutionTimers.delete(marketId);
-    };
-
+    const startedAt = Date.now();
     const poll = async () => {
-      if (!this.running || !this.hasOpenPositionsForMarket(marketId)) {
-        stop();
-        return;
-      }
+      this.resolutionTimers.delete(marketId);
+      if (!this.running || !this.hasOpenPositions(marketId)) return;
       await this.pollSettlement(marketId);
-      if (!this.hasOpenPositionsForMarket(marketId)) {
-        stop();
-        return;
-      }
-      const elapsed = Date.now() - startTime;
-      const interval = elapsed < FAST_PHASE_MS ? FAST_INTERVAL : SLOW_INTERVAL;
-      timerId = setTimeout(poll, interval);
-      this.resolutionTimers.set(marketId, timerId);
+      if (!this.hasOpenPositions(marketId)) return;
+      const interval = Date.now() - startedAt < 2 * 60_000 ? 5_000 : 30_000;
+      this.resolutionTimers.set(marketId, setTimeout(poll, interval));
     };
-
-    let timerId = setTimeout(poll, FAST_INTERVAL);
-    this.resolutionTimers.set(marketId, timerId);
+    this.resolutionTimers.set(marketId, setTimeout(poll, 5_000));
   }
+
   private async pollSettlement(marketId: string): Promise<void> {
-    const RESOLVE_THRESHOLD = 0.99;
     try {
       const market = await this.client.getMarketById(marketId);
       if (!market) return;
-
-      const outcomes = PolymarketClient.parseOutcomes(market);
       const prices = PolymarketClient.parseOutcomePrices(market);
-      const tokenIds = PolymarketClient.parseClobTokenIds(market);
-
-      const winIdx = prices.findIndex((p) => p >= RESOLVE_THRESHOLD);
-      if (winIdx < 0) return; // not yet decisive — poll again
-
-      const winningTokenId = tokenIds[winIdx];
-      const winningOutcome = outcomes[winIdx];
+      const winIdx = prices.findIndex((p) => p >= 0.99);
+      if (winIdx < 0) return;
+      const winningTokenId = PolymarketClient.parseClobTokenIds(market)[winIdx];
+      const winningOutcome = PolymarketClient.parseOutcomes(market)[winIdx];
       if (!winningTokenId || !winningOutcome) return;
 
       const state = this.activeMarkets.get(marketId);
       if (state) state.resolved = true;
-      await this.settleMarketPositions(
-        marketId,
-        winningTokenId,
-        winningOutcome,
-      );
+      await this.settleMarketPositions(marketId, winningTokenId, winningOutcome);
     } catch (error) {
       logger.error({ error, marketId }, "Settlement poll failed");
-      logAudit(
-        "error",
-        "SYSTEM",
-        `Settlement poll failed for market ${marketId}: ${error instanceof Error ? error.message : String(error)}`,
-      ).catch(() => {});
-    }
-  }
-  private async settleMarketPositions(
-    marketId: string,
-    winningTokenId: string,
-    winningOutcome: string,
-  ): Promise<void> {
-    for (const [tradeId, pos] of this.openPositions) {
-      if (pos.marketId !== marketId) continue;
-      // A wipe can land between iterations. Anything it cleared is gone.
-      if (!this.openPositions.has(tradeId)) continue;
-
-      const isWin = pos.tokenId === winningTokenId;
-      // Only what we still hold redeems; a partial stop already banked the rest.
-      const redemption = isWin ? pos.remainingShares : 0;
-      const pnl = pos.exitGross - pos.exitFees + redemption - pos.actualCost;
-      if (redemption > 0) await this.portfolioManager.addCash(redemption);
-
-      const partiallyStopped = pos.exitGross > 0;
-      const resolvedTrade = await resolveTrade(
-        tradeId,
-        pnl > 0 ? "WIN" : "LOSS",
-        pnl.toFixed(6),
-        ((pos.exitGross + redemption) / pos.entryShares).toFixed(6),
-        { exitReason: partiallyStopped ? "STOP_LOSS" : "RESOLUTION" },
-      );
-      this.untrackPosition(tradeId);
-
-      await logAudit(
-        "info",
-        "TRADE_RESOLVED",
-        `Trade ${tradeId} resolved: ${pnl > 0 ? "WIN" : "LOSS"} (${winningOutcome})`,
-        {
-          tradeId,
-          outcome: pnl > 0 ? "WIN" : "LOSS",
-          pnl,
-          winningOutcome,
-          sharesRedeemed: pos.remainingShares,
-          stopProceeds: pos.exitGross - pos.exitFees,
-          cashBalance: this.portfolioManager.getCashBalance(),
-        },
-      );
-      logger.info(
-        {
-          tradeId,
-          marketId,
-          outcome: pnl > 0 ? "WIN" : "LOSS",
-          pnl: pnl.toFixed(4),
-        },
-        pnl > 0 ? "✅ Trade WON" : "❌ Trade LOST",
-      );
-
-      this.emit("tradeResolved", {
-        tradeId,
-        isWin: pnl > 0,
-        pnl,
-        exitPrice: (pos.exitGross + redemption) / pos.entryShares,
-        trade: resolvedTrade,
-      });
-    }
-
-    if (!this.hasOpenPositionsForMarket(marketId)) {
-      this.cleanupMarket(marketId);
+      logAudit("error", "SYSTEM", `Settlement poll failed for market ${marketId}: ${errorMessage(error)}`).catch(() => {});
     }
   }
 
-  private async loadOpenPositions(): Promise<void> {
-    const rows = await loadOpenTradesWithMarkets();
-
-    for (const { trade, marketEndDate } of rows) {
-      this.trackPosition({
-        tradeId: trade.id,
-        marketId: trade.marketId ?? "",
-        tokenId: trade.tokenId ?? "",
-        outcomeLabel: trade.outcomeLabel ?? "",
-        entryPrice: parseFloat(trade.entryPrice),
-        entryShares: parseFloat(trade.entryShares),
-        fees: parseFloat(trade.entryFees ?? "0"),
-        actualCost: parseFloat(trade.actualCost ?? "0"),
-        marketEndDate: marketEndDate ? new Date(marketEndDate) : new Date(),
-        minBid: parseFloat(trade.minPriceDuringPosition ?? trade.entryPrice),
-        remainingShares: parseFloat(trade.entryShares),
-        exitGross: 0,
-        exitFees: 0,
-        stopTriggered: false,
-      });
-
-      if (trade.marketId) this.scheduleSettlementWatch(trade.marketId);
-    }
-
-    if (rows.length > 0) {
-      logger.info(
-        { count: rows.length },
-        "Loaded existing open positions from database",
-      );
-    }
-  }
-
-  private async loadActiveMarkets(): Promise<void> {
-    const config = getConfig();
-    const db = getDb();
-
-    const cutoff = new Date(Date.now() - 60 * 60 * 1000);
-    const marketRows = await db
-      .select()
-      .from(schema.markets)
-      .where(
-        and(
-          eq(schema.markets.active, true),
-          eq(schema.markets.windowType, WINDOW_CONFIG.category),
-          gte(schema.markets.endDate, cutoff.toISOString()),
-        ),
-      )
-      .orderBy(desc(schema.markets.endDate))
-      .limit(50);
-
-    for (const row of marketRows) {
-      if (this.activeMarkets.has(row.id)) continue;
-
-      const tokenIds = row.clobTokenIds as string[] | null;
-      const outcomes = row.outcomes as string[] | null;
-
-      if (
-        !tokenIds ||
-        tokenIds.length < 2 ||
-        !outcomes ||
-        outcomes.length < 2
-      ) {
-        logger.warn(
-          { marketId: row.id },
-          "Skipping market with invalid token IDs or outcomes",
-        );
-        continue;
-      }
-
-      const endDate = row.endDate ? new Date(row.endDate) : new Date();
-      const targetPrice = row.targetPrice ? parseFloat(row.targetPrice) : null;
-
-      const hasOpenPositions = this.hasOpenPositionsForMarket(row.id);
-
-      // Drop markets that ended over 30 min ago with no open positions.
-      const thirtyMinutesAgo = marketNow() - 30 * 60 * 1000;
-      if (endDate.getTime() < thirtyMinutesAgo && !hasOpenPositions) {
-        continue;
-      }
-
-      const state: ActiveMarketState = {
-        marketId: row.id,
-        conditionId: row.conditionId ?? null,
-        yesTokenId: tokenIds[0]!,
-        noTokenId: tokenIds[1]!,
-        question: row.question ?? "",
-        slug: row.slug ?? null,
-        endDate,
-        targetPrice,
-        btcPriceAtWindowStart: targetPrice,
-        outcomes,
-        lastPrices: {},
-        summary: emptySummary(),
-        subscribedWs: false,
-        resolved: false,
-        rawMarket: row.metadata,
-      };
-
-      this.registerMarketState(state);
-      // A strike restored from a previous run is already the window-open TWAP.
-      // Only a market without one still needs filling, and after a restart the
-      // buffer will not reach back that far, so it simply stays untradeable.
-      if (targetPrice === null) this.pendingBtcFills.add(row.id);
-
-      for (let i = 0; i < tokenIds.length; i++) {
-        this.strategyEngine.registerMarket(
-          row.id,
-          tokenIds[i]!,
-          outcomes[i] ?? `Outcome${i}`,
-          endDate,
-          targetPrice,
-        );
-      }
-
-      this.wsWatcher.subscribe(tokenIds);
-      state.subscribedWs = true;
-
-      logger.info(
-        {
-          marketId: row.id,
-          question: row.question,
-          endDate: endDate.toISOString(),
-          hasOpenPositions,
-        },
-        "Loaded existing active market from database",
-      );
-    }
-
-    if (marketRows.length > 0) {
-      logger.info(
-        { count: marketRows.length, active: this.activeMarkets.size },
-        "Loaded existing active markets from database",
-      );
-    }
-  }
-
-  /** Raw GammaMarkets for active markets, for API merging. */
-  getRawActiveMarkets(): any[] {
-    return Array.from(this.activeMarkets.values())
-      .map((state) => state.rawMarket)
-      .filter(Boolean);
-  }
-
-  /** Remove expired markets with no open positions; kept otherwise until resolved. */
   private cleanupExpiredMarkets(): void {
     const now = marketNow();
-    const toClean: string[] = [];
-
-    for (const [marketId, state] of this.activeMarkets) {
-      if (state.resolved) {
-        toClean.push(marketId);
-        continue;
-      }
-      if (state.endDate.getTime() > now) continue;
-      if (this.hasOpenPositionsForMarket(marketId)) continue;
-      toClean.push(marketId);
-    }
-
-    for (const marketId of toClean) {
-      this.cleanupMarket(marketId);
-    }
-
-    if (toClean.length > 0) {
-      logger.debug(
-        { cleaned: toClean.length, remaining: this.activeMarkets.size },
-        "Cleaned up expired markets",
-      );
+    for (const [marketId, state] of [...this.activeMarkets]) {
+      if (state.resolved || state.endDate.getTime() <= now) this.cleanupMarket(marketId);
     }
   }
 
   private cleanupMarket(marketId: string): void {
     const state = this.activeMarkets.get(marketId);
-    if (!state) return;
+    if (!state || this.hasOpenPositions(marketId)) return;
 
-    // Never clean up a market that still has open positions.
-    if (this.hasOpenPositionsForMarket(marketId)) return;
-
-    this.flushEvaluations(state);
-
-    if (state.subscribedWs) {
-      this.wsWatcher.unsubscribe([state.yesTokenId, state.noTokenId]);
-    }
-
+    this.flushSummary(state);
+    this.wsWatcher.unsubscribe([state.yesTokenId, state.noTokenId]);
     this.strategyEngine.unregisterMarket(state.yesTokenId);
     this.strategyEngine.unregisterMarket(state.noTokenId);
     this.strategyEngine.releaseMarket(marketId);
-
-    if (state.conditionId) {
-      this.conditionIdMap.delete(state.conditionId);
-    }
-
+    if (state.conditionId) this.conditionIdMap.delete(state.conditionId);
     this.tokenToMarket.delete(state.yesTokenId);
     this.tokenToMarket.delete(state.noTokenId);
-
     this.activeMarkets.delete(marketId);
   }
 
-  /**
-   * Write the closest-to-expiry decision for each side once the window is done.
-   * Fire-and-forget: nothing about market cleanup should wait on a database
-   * round trip.
-   */
-  private flushEvaluations(state: ActiveMarketState): void {
+  private flushSummary(state: ActiveMarketState): void {
     const s = state.summary;
-    if (s.decidedSeconds === 0 && state.targetPrice === null) return;
-
-    const verdict = s.traded
-      ? "traded"
-      : s.decidedSeconds === 0
-        ? "never decided"
-        : (s.lastSkipReason ?? "not taken");
-    logAudit(
-      "info",
-      "EVALUATION",
-      `Window ${state.slug ?? state.marketId} closed: ${verdict}`,
-      {
-        marketId: state.marketId,
-        slug: state.slug,
-        windowEnd: state.endDate.toISOString(),
-        strike: state.targetPrice,
-        decidedSide: s.decidedSide,
-        decidedSeconds: s.decidedSeconds,
-        firstDecidedTau: s.firstDecidedTau === null ? null : round(s.firstDecidedTau, 1),
-        minDecidedAsk: s.minDecidedAsk === null ? null : round(s.minDecidedAsk),
-        minDecidedAskTau: s.minDecidedAskTau === null ? null : round(s.minDecidedAskTau, 1),
-        lastSkipReason: s.lastSkipReason,
-        traded: s.traded,
-      },
-    ).catch((err) =>
-      logger.error({ err, marketId: state.marketId }, "Failed to log evaluation"),
-    );
+    if (s.bursts === 0 && state.strike === null) return;
+    const verdict = s.traded ? "traded" : s.bursts === 0 ? "no burst" : (s.lastSkipReason ?? "not taken");
+    logAudit("info", "EVALUATION", `Window ${state.slug ?? state.marketId} closed: ${verdict}`, {
+      marketId: state.marketId,
+      slug: state.slug,
+      windowEnd: state.endDate.toISOString(),
+      strike: state.strike,
+      bursts: s.bursts,
+      firstBurstTau: round(s.firstBurstTau, 1),
+      lastBurstSide: s.lastBurstSide,
+      minBurstAsk: round(s.minBurstAsk),
+      minBurstAskTau: round(s.minBurstAskTau, 1),
+      lastSkipReason: s.lastSkipReason,
+      traded: s.traded,
+    }).catch((err) => logger.error({ err, marketId: state.marketId }, "Failed to log evaluation"));
   }
 }
+
+const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 let instance: MarketOrchestrator | null = null;
 export function getMarketOrchestrator(): MarketOrchestrator {

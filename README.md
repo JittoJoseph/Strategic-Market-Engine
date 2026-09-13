@@ -7,8 +7,8 @@
 [![Health Check](https://img.shields.io/website?url=https://market-api.jittojoseph.xyz/ping&label=health)](https://market-api.jittojoseph.xyz/ping)
 
 A paper-trading simulator for Polymarket's BTC 15-minute Up/Down markets. It
-watches live markets, works out which side the settlement is heading for, and
-buys that side as a taker when the book still prices it as a discount. Fills are
+watches the trade tape of live markets, follows bursts of large taker flow, and
+buys behind them as a taker while the price still leaves real upside. Fills are
 simulated against the real order book.
 
 No real money is traded.
@@ -18,59 +18,47 @@ No real money is traded.
 These markets resolve on the **Chainlink BTC/USD 60-second TWAP**: `Up` wins
 when the TWAP at window close is at or above the TWAP at window open.
 
-The engine holds no view on where BTC is going. It waits until the window is
-most of the way through, asks a single question — how far is the settlement
-forecast from the strike, relative to what the time left can still move it —
-and buys the favoured side if the book offers it below 0.85.
+The engine holds no view on where BTC is going and does not price the market
+itself. Every forecast-driven approach tried here lost to the book: makers on
+these markets run on faster feeds, price the TWAP roll-off correctly, and are
+right whenever they disagree with a model. What the model cannot see, the tape
+can. A single large taker print carries no information — on four days of
+prints the side of a lone sweep resolved *against* it two times in three. Two or
+more large prints on the same side inside three seconds is a different signal:
+somebody is leaning in, and that side resolved their way well above what the
+price implied, especially where the price was still 0.15–0.70.
 
-It is deliberately not a certainty detector. A floor strict enough to be never
-wrong (100% on 383 real windows) turned out to be useless in practice: by the
-time the margin clears it, the book has already repriced to 1.00 and there is
-nothing to buy. The floor used here is 0.4× that calibrated table, the point
-where side accuracy is still ~98% but entries land around 0.5 a few times a
-day. That trade-off — a rare loss that the stop turns into a partial one,
-against wins that roughly double the stake — is the whole bet.
+That is the whole trade. Watch the tape; when a burst forms on a side the book
+still prices as uncertain, buy that side at the ask the book shows after the
+burst.
 
 ## How it works
 
 Markets are discovered by deterministic slug (`btc-updown-15m-<windowStart>`)
-and subscribed to over the CLOB WebSocket. Two RTDS feeds are consumed: the
-`crypto_prices_twap_sixty` series that settlement runs on, and the unsmoothed
-`crypto_prices_chainlink` series that drives it.
+and subscribed to over the CLOB WebSocket, which delivers the book and every
+fill. Two RTDS feeds are consumed: the `crypto_prices_twap_sixty` series that
+settlement runs on, and the unsmoothed `crypto_prices_chainlink` series that
+drives it.
 
-**Strike.** The TWAP observed at the window open. A window whose open was not
-observed stays unstruck and is never traded.
+**Burst.** A taker fill of at least `FLOW_MIN_PRINT_SHARES` shares is a large
+print. A taker buying a token is flow toward that outcome; a taker selling it
+is flow toward the other. `FLOW_MIN_PRINTS` large prints toward the same
+outcome inside `FLOW_BURST_MS` form a burst, and the burst is scored the moment
+it completes.
 
-**Forecast.** Inside the final minute the closing TWAP is a moving average that
-has already absorbed most of its inputs, so its expected value is computable
-from spot and the stretch about to roll out of the average. Beyond the final
-minute the expectation is simply spot.
+**Entry.** Between 120 and 10 seconds before close, buy the burst side if its
+executable ask sits within `[0.15, 0.70]`. One trade per window. Bursts with
+real upside happen almost only in the 60–120 s zone; later the book has already
+priced the side, and above 0.70 following flow measured negative.
 
-**Favoured.** A side is favoured when the forecast clears the strike by a floor
-that depends on time to close — an empirical table in basis points of price,
-times `DECIDED_FLOOR_MULTIPLIER`, and never below `DECIDED_SD_MULTIPLE` model
-standard deviations. Basis points so it carries across price levels; the sd
-term so volatile regimes demand more.
+**Veto.** The settlement forecast — the expected closing TWAP given spot and
+the stretch about to roll out of the average — never opens a trade. It vetoes
+one: a burst against a side the forecast is at least `VETO_SD_MULTIPLE`
+standard deviations sure of is not followed.
 
-| seconds to close | calibrated floor (bp) | at 0.4× |
-|---|---|---|
-| < 15 | 1.3 | 0.5 |
-| 15–30 | 2.6 | 1.0 |
-| 30–60 | 6.5 | 2.6 |
-| 60–120 | 19.5 | 7.8 |
-| 120–300 | 32.5 | 13.0 |
-| > 300 | never | never |
-
-**Live market.** No entry unless the market's CLOB has printed a real fill in
-the last 120 seconds. Every fill the simulator ever took at a "stale" price was
-on a market Polymarket had stopped matching during a declared incident; those
-fills could not have happened. This one rule blocked 100% of such windows in
-the history and under 2% of healthy ones.
-
-**Entry.** From 300 seconds before close down to 5, on every settlement tick,
-buy the favoured side if its executable ask sits within `[0.15, 0.85]`. One
-trade per window. The order is held for Polymarket's 50 ms taker delay and
-matched against the book as it stands after the hold.
+**Live market.** No entry unless the market has printed a real fill in the
+last 120 seconds. Every fill the simulator ever took at a "stale" price was on
+a market Polymarket had stopped matching during a declared incident.
 
 **Exit.** A stop fires when the executable bid falls to 65% of the entry price;
 otherwise the position rides to oracle resolution. The stop is always on and
@@ -81,10 +69,24 @@ too thin to absorb the whole position leaves a remainder, which stays open with
 the trigger re-armed.
 
 **Execution.** Simulated FAK taker orders walk the real book level by level, so
-fills reflect actual depth, partial fills, slippage and fees. The taker fee is
-Polymarket's published crypto schedule, `shares × 0.07 × p × (1−p)`.
+fills reflect actual depth, partial fills, slippage and fees. Orders are held
+for Polymarket's 50 ms taker delay and matched against the book as it stands
+after the hold. The taker fee is Polymarket's published crypto schedule,
+`shares × 0.07 × p × (1−p)`.
 
 All parameters are environment-tunable; see [`backend/.env.example`](backend/.env.example).
+
+## What to expect, and what would falsify it
+
+On the four days of tape the rule was calibrated against, the base definition
+(two prints of fifty shares inside three seconds) fired about fourteen times a
+day at prices under 0.70 and was right 57% of the time at a mean entry of 0.48
+— roughly twenty points above what the price implied in the cheap zone. That is
+the evidence, and it is thin: the edge weakens when the burst window is widened
+to five seconds, and it is negative above 0.70. The live run is the test. If a
+week of trades shows the burst side resolving at or below the entry price's
+implied rate, the signal is noise and this strategy should be retired, not
+tuned.
 
 ## Simulation settings
 
@@ -99,11 +101,10 @@ real-money system:
 ## Evaluation data
 
 Every window writes one `audit_log` row under category `EVALUATION` at
-cleanup: which side became favoured and when, how many seconds it stayed so,
-the cheapest ask the book offered on that side meanwhile, and the last reason
-the engine gave for not trading — including `market_stale`. Untraded windows
-are the baseline for whether the price cap and floor sit where the
-opportunities are.
+cleanup: how many bursts it produced, when the first came and on which side,
+the cheapest ask the book showed on a burst side when it was scored, and the
+last reason the engine gave for not trading. Untraded windows are the baseline
+for whether the price band sits where the flow is.
 
 ## Admin operations
 
@@ -139,8 +140,8 @@ paused flag.
 | Market data | Polymarket Gamma API, CLOB WebSocket, RTDS TWAP + raw feeds |
 
 Backend services are single-purpose and wired through one orchestrator: market
-scanner, CLOB book watcher, BTC price watcher, strategy engine, execution
-simulator, portfolio manager, API server.
+scanner, CLOB book and tape watcher, BTC price watcher, strategy engine,
+execution simulator, portfolio manager, API server.
 
 Window boundaries and entry deadlines are defined by Polymarket, so the engine
 runs on a market clock synced to the CLOB server rather than the host clock.
