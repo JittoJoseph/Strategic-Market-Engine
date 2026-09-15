@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { createModuleLogger } from "../utils/logger.js";
 import { STRATEGY } from "../types/index.js";
 import { marketNow } from "./market-clock.js";
+import { getPlatformStatusWatcher } from "./platform-status.js";
 import type { SettlementForecast } from "./settlement-model.js";
 
 const logger = createModuleLogger("strategy-engine");
@@ -29,7 +30,7 @@ export interface MarketOpportunity {
 export type SkipReason =
   | "outside_entry_window"
   | "no_strike"
-  | "market_stale"
+  | "platform_not_up"
   | "no_forecast"
   | "model_opposes"
   | "quote_missing"
@@ -76,7 +77,6 @@ export class StrategyEngine extends EventEmitter {
   /** marketId → outcomeLabel → tokenId */
   private tokensByMarket = new Map<string, Map<string, string>>();
   private forecasts = new Map<string, SettlementForecast>();
-  private lastTradeByMarket = new Map<string, number>();
   private prints = new Map<string, LargePrint[]>();
   private tradedMarkets = new Set<string>();
   private triggersCount = 0;
@@ -98,7 +98,6 @@ export class StrategyEngine extends EventEmitter {
     if (!tokens?.size) {
       this.tokensByMarket.delete(market.marketId);
       this.forecasts.delete(market.marketId);
-      this.lastTradeByMarket.delete(market.marketId);
       this.prints.delete(market.marketId);
     }
   }
@@ -112,7 +111,6 @@ export class StrategyEngine extends EventEmitter {
     this.markets.clear();
     this.tokensByMarket.clear();
     this.forecasts.clear();
-    this.lastTradeByMarket.clear();
     this.prints.clear();
     this.tradedMarkets.clear();
     this.triggersCount = 0;
@@ -140,16 +138,13 @@ export class StrategyEngine extends EventEmitter {
   }
 
   /**
-   * A taker fill on a token. Every fill keeps the market live; large ones feed
-   * the burst buffer. Returns the evaluation when a burst was scored and emits
-   * `opportunityDetected` when its side is bought.
+   * A taker fill on a token; large ones feed the burst buffer. Returns the
+   * evaluation when a burst was scored and emits `opportunityDetected` when its
+   * side is bought.
    */
   noteTrade(tokenId: string, takerSide: "BUY" | "SELL", size: number, timestamp: number): Evaluation | null {
     const market = this.markets.get(tokenId);
     if (!market) return null;
-    if (timestamp > (this.lastTradeByMarket.get(market.marketId) ?? 0)) {
-      this.lastTradeByMarket.set(market.marketId, timestamp);
-    }
 
     const { flowMinPrintShares, flowBurstMs, flowMinPrints } = STRATEGY;
     if (!(size >= flowMinPrintShares)) return null;
@@ -199,9 +194,8 @@ export class StrategyEngine extends EventEmitter {
     if (secondsToEnd > config.entryWindowOpenSeconds || secondsToEnd < config.entryWindowCloseSeconds) {
       return skip("outside_entry_window");
     }
+    if (!getPlatformStatusWatcher().isUp()) return skip("platform_not_up");
     if (market.strike === null) return skip("no_strike");
-    const lastTrade = this.lastTradeByMarket.get(market.marketId);
-    if (lastTrade === undefined || now - lastTrade > config.marketLivenessMs) return skip("market_stale");
     if (!forecast) return skip("no_forecast");
     const against = market.outcomeLabel === "Up" ? forecast.zScore < 0 : forecast.zScore > 0;
     if (against && Math.abs(forecast.zScore) >= config.vetoSdMultiple) return skip("model_opposes");

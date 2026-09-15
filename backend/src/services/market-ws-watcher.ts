@@ -26,7 +26,6 @@ export class MarketWebSocketWatcher extends EventEmitter {
   private ws: WebSocket | null = null;
   private subscribedTokens = new Set<string>();
   private books = new Map<string, MaintainedBook>();
-  private lastTradeAt = new Map<string, number>();
   private running = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -62,7 +61,6 @@ export class MarketWebSocketWatcher extends EventEmitter {
     for (const id of tokenIds) {
       this.subscribedTokens.delete(id);
       this.books.delete(id);
-      this.lastTradeAt.delete(id);
     }
     this.send({ assets_ids: tokenIds, operation: "unsubscribe" } satisfies SubscriptionUpdateMessage);
   }
@@ -80,10 +78,6 @@ export class MarketWebSocketWatcher extends EventEmitter {
         .sort((a, b) => (desc ? b[0] - a[0] : a[0] - b[0]))
         .map(([price, size]) => ({ price: String(price), size: String(size) }));
     return { bids: levels(book.bids, true), asks: levels(book.asks, false) };
-  }
-
-  getLastTradeAt(tokenId: string): number | null {
-    return this.lastTradeAt.get(tokenId) ?? null;
   }
 
   getBestBid(tokenId: string): number | null {
@@ -188,7 +182,6 @@ export class MarketWebSocketWatcher extends EventEmitter {
         const price = parseFloat(msg.price);
         const size = parseFloat(msg.size ?? "0");
         if (!Number.isFinite(price) || !Number.isFinite(size)) break;
-        this.lastTradeAt.set(msg.asset_id, ts);
         this.emit("trade", {
           tokenId: msg.asset_id,
           takerSide: msg.side === "SELL" ? "SELL" : "BUY",

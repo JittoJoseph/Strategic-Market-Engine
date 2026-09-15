@@ -26,6 +26,7 @@ import { forecastSettlement, rollingOutRange } from "./settlement-model.js";
 import { simulateLimitBuy, simulateLimitSell, stopTriggerPrice } from "./execution-simulator.js";
 import { getBtcPriceWatcher, BtcPriceWatcher } from "./btc-price-watcher.js";
 import { marketNow } from "./market-clock.js";
+import { getPlatformStatusWatcher } from "./platform-status.js";
 import { getPolymarketClient, PolymarketClient } from "./polymarket-client.js";
 import { PortfolioManager } from "./portfolio-manager.js";
 
@@ -79,6 +80,7 @@ interface OpenPosition {
   exitGross: number;
   exitFees: number;
   stopTriggered: boolean;
+  belowStopSince: number | null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -181,6 +183,7 @@ export class MarketOrchestrator extends EventEmitter {
       scanner: { discoveredCount: this.scanner.getDiscoveredCount() },
       ws: this.wsWatcher.getStats(),
       strategy: this.strategyEngine.getStats(),
+      platform: getPlatformStatusWatcher().getStatus(),
       btcConnected: this.btcWatcher.isConnected(),
       btcPrice: this.btcWatcher.getCurrentTwap()?.price ?? null,
       btcRawPrice: this.btcWatcher.getCurrentRaw()?.price ?? null,
@@ -415,6 +418,7 @@ export class MarketOrchestrator extends EventEmitter {
         exitGross: 0,
         exitFees: 0,
         stopTriggered: false,
+        belowStopSince: null,
       });
       if (trade.marketId) this.scheduleSettlementWatch(trade.marketId);
     }
@@ -458,7 +462,13 @@ export class MarketOrchestrator extends EventEmitter {
         pos.minBid = bestBid;
         updateTradeMinPrice(pos.tradeId, bestBid.toFixed(6)).catch(() => {});
       }
-      if (pos.stopTriggered || bestBid > stopTriggerPrice(pos.entryPrice, fraction)) continue;
+      if (bestBid > stopTriggerPrice(pos.entryPrice, fraction)) {
+        pos.belowStopSince = null;
+        continue;
+      }
+      // Late-window books wick through the level and recover; only a dip that holds is a stop.
+      pos.belowStopSince ??= now;
+      if (pos.stopTriggered || now - pos.belowStopSince < STRATEGY.stopConfirmMs) continue;
       pos.stopTriggered = true;
       logger.warn({ tradeId: pos.tradeId, bestBid, entryPrice: pos.entryPrice }, "Stop triggered");
       this.submitStopLossExit(pos).catch((err) => {
@@ -501,12 +511,8 @@ export class MarketOrchestrator extends EventEmitter {
   }
 
   private onTrade(ev: TradeEvent): void {
-    const evaluation = this.strategyEngine.noteTrade(
-      ev.tokenId,
-      ev.takerSide,
-      this.paused ? 0 : ev.size,
-      ev.timestamp,
-    );
+    if (this.paused) return;
+    const evaluation = this.strategyEngine.noteTrade(ev.tokenId, ev.takerSide, ev.size, ev.timestamp);
     if (!evaluation || evaluation.skipReason === "outside_entry_window") return;
     const marketId = this.tokenToMarket.get(ev.tokenId);
     const s = marketId ? this.activeMarkets.get(marketId)?.summary : undefined;
@@ -619,6 +625,7 @@ export class MarketOrchestrator extends EventEmitter {
         exitGross: 0,
         exitFees: 0,
         stopTriggered: false,
+        belowStopSince: null,
       });
       this.scheduleSettlementWatch(opp.marketId);
       this.cycleCount++;

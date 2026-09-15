@@ -11,6 +11,8 @@ vi.mock("../utils/logger.js", () => {
 
 const NOW = 1_800_000_000_000;
 vi.mock("../services/market-clock.js", () => ({ marketNow: () => NOW }));
+const platform = { up: true };
+vi.mock("../services/platform-status.js", () => ({ getPlatformStatusWatcher: () => ({ isUp: () => platform.up }) }));
 
 const { StrategyEngine } = await import("../services/strategy-engine.js");
 const { forecastSettlement, rollingOutRange } = await import(
@@ -93,7 +95,7 @@ describe("StrategyEngine", () => {
     engine.registerMarket("m1", UP, "Up", new Date(END), PRICE);
     engine.registerMarket("m1", DOWN, "Down", new Date(END), PRICE);
     engine.updateForecast("m1", makeForecast({ rawNow: PRICE }));
-    engine.updateQuote(UP, 0.5, 0.52);
+    engine.updateQuote(UP, 0.4, 0.42);
     engine.updateQuote(DOWN, 0.46, 0.48);
   });
 
@@ -106,7 +108,7 @@ describe("StrategyEngine", () => {
     expect(handler).toHaveBeenCalledOnce();
     const opp = handler.mock.calls[0]![0];
     expect(opp.outcomeLabel).toBe("Up");
-    expect(opp.bestAsk).toBe(0.52);
+    expect(opp.bestAsk).toBe(0.42);
     expect(opp.burst.prints).toBe(2);
     expect(opp.burst.shares).toBe(140);
   });
@@ -168,7 +170,7 @@ describe("StrategyEngine", () => {
   it("skips when no forecast is available", () => {
     engine.registerMarket("m2", "t2u", "Up", new Date(END), PRICE);
     engine.registerMarket("m2", "t2d", "Down", new Date(END), PRICE);
-    engine.updateQuote("t2u", 0.5, 0.52);
+    engine.updateQuote("t2u", 0.4, 0.42);
     engine.noteTrade("t2u", "BUY", 60, NOW - 2_000);
     expect(engine.noteTrade("t2u", "BUY", 60, NOW - 500)?.skipReason).toBe("no_forecast");
   });
@@ -197,29 +199,28 @@ describe("StrategyEngine", () => {
     engine.registerMarket("m4", "t4u", "Up", new Date(END), null);
     engine.registerMarket("m4", "t4d", "Down", new Date(END), null);
     engine.updateForecast("m4", makeForecast({ rawNow: PRICE }));
-    engine.updateQuote("t4u", 0.5, 0.52);
+    engine.updateQuote("t4u", 0.4, 0.42);
     engine.noteTrade("t4u", "BUY", 60, NOW - 2_000);
     expect(engine.noteTrade("t4u", "BUY", 60, NOW - 500)?.skipReason).toBe("no_strike");
   });
 
-  it("skips a market whose last fill is too old", () => {
-    engine.noteTrade(UP, "BUY", 60, NOW - 200_000);
-    engine.noteTrade(UP, "BUY", 60, NOW - 199_000);
-    engine.noteTrade(UP, "BUY", 60, NOW - 198_000);
-    // burst formed in the past; the market has been silent since
-    engine.registerMarket("m5", "t5u", "Up", new Date(END), PRICE);
-    engine.registerMarket("m5", "t5d", "Down", new Date(END), PRICE);
-    engine.updateForecast("m5", makeForecast({ rawNow: PRICE }));
-    engine.updateQuote("t5u", 0.5, 0.52);
-    engine.noteTrade("t5u", "BUY", 60, NOW - 130_000);
-    expect(engine.noteTrade("t5u", "BUY", 60, NOW - 129_000)?.skipReason).toBe("market_stale");
+  it("skips while Polymarket's status page is not UP", () => {
+    platform.up = false;
+    try {
+      engine.updateQuote(UP, 0.4, 0.42);
+      engine.noteTrade(UP, "BUY", 60, NOW - 2_000);
+      expect(engine.noteTrade(UP, "BUY", 60, NOW - 500)?.skipReason).toBe("platform_not_up");
+      expect(engine.getStats().tradedMarkets).toBe(0);
+    } finally {
+      platform.up = true;
+    }
   });
 
   it("reports outside the entry window without consuming the market", () => {
     engine.registerMarket("m6", "t6u", "Up", new Date(NOW + 600_000), PRICE);
     engine.registerMarket("m6", "t6d", "Down", new Date(NOW + 600_000), PRICE);
     engine.updateForecast("m6", makeForecast({ rawNow: PRICE, endMs: NOW + 600_000 }));
-    engine.updateQuote("t6u", 0.5, 0.52);
+    engine.updateQuote("t6u", 0.4, 0.42);
     engine.noteTrade("t6u", "BUY", 60, NOW - 2_000);
     expect(engine.noteTrade("t6u", "BUY", 60, NOW - 500)?.skipReason).toBe("outside_entry_window");
     expect(engine.getStats().tradedMarkets).toBe(0);
@@ -258,7 +259,7 @@ describe("StrategyEngine", () => {
       engine.registerMarket("m1", UP, "Up", new Date(END), PRICE);
       engine.registerMarket("m1", DOWN, "Down", new Date(END), PRICE);
       engine.updateForecast("m1", makeForecast({ rawNow: PRICE }));
-      engine.updateQuote(UP, 0.5, 0.52);
+      engine.updateQuote(UP, 0.4, 0.42);
       engine.noteTrade(UP, "BUY", 60, NOW - 1_000);
       engine.noteTrade(UP, "BUY", 60, NOW - 500);
       expect(handler).toHaveBeenCalledTimes(2);

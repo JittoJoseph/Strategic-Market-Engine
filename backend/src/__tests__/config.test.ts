@@ -44,5 +44,6 @@ describe("configuration", () => {
     expect(STRATEGY.flowMinPrints).toBeGreaterThanOrEqual(2);
     expect(STRATEGY.stopLossFraction).toBeGreaterThan(0);
     expect(STRATEGY.stopLossFraction).toBeLessThan(1);
+    expect(STRATEGY.stopConfirmMs).toBeGreaterThan(0);
   });
 });
