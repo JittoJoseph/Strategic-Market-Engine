@@ -109,6 +109,7 @@ export interface LiveState {
       triggersCount: number;
       tradedMarkets: number;
     };
+    platform: { status: string; up: boolean; checkedAt: number | null };
     btcConnected: boolean;
     btcPrice: number | null;
     /** BTC realized per-second volatility in USD (null until enough data) */
@@ -134,8 +135,8 @@ export interface LiveState {
     flowMinPrints: number;
     flowBurstMs: number;
     vetoSdMultiple: number;
-    marketLivenessMs: number;
     stopLossFraction: number;
+    stopConfirmMs: number;
     startingCapital: number;
     positionBudgetUsd: number;
 

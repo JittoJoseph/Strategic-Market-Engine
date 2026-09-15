@@ -274,6 +274,12 @@ export function DashboardPage() {
                     accent={stats.orchestrator.btcConnected}
                   />
                   <StatRow
+                    label="Polymarket"
+                    value={stats.orchestrator.platform.status}
+                    accent={stats.orchestrator.platform.up}
+                    warn={!stats.orchestrator.platform.up}
+                  />
+                  <StatRow
                     label="BTC Vol"
                     value={(() => {
                       const s = rawSigma ?? stats.orchestrator.rawSigma;
@@ -312,12 +318,8 @@ export function DashboardPage() {
                     value={`≥ ${stats.config.vetoSdMultiple}σ against`}
                   />
                   <StatRow
-                    label="Market Liveness"
-                    value={`fill within ${Math.round(stats.config.marketLivenessMs / 1000)}s`}
-                  />
-                  <StatRow
                     label="Stop Loss"
-                    value={`${(stats.config.stopLossFraction * 100).toFixed(0)}% below entry`}
+                    value={`${(stats.config.stopLossFraction * 100).toFixed(0)}% below, held ${stats.config.stopConfirmMs / 1000}s`}
                     accent
                   />
                   <StatRow

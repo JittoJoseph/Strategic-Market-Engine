@@ -26,7 +26,7 @@ can. A single large taker print carries no information — on four days of
 prints the side of a lone sweep resolved *against* it two times in three. Two or
 more large prints on the same side inside three seconds is a different signal:
 somebody is leaning in, and that side resolved their way well above what the
-price implied, especially where the price was still 0.15–0.70.
+price implied, especially where the price was still 0.15–0.50.
 
 That is the whole trade. Watch the tape; when a burst forms on a side the book
 still prices as uncertain, buy that side at the ask the book shows after the
@@ -47,26 +47,35 @@ outcome inside `flowBurstMs` form a burst, and the burst is scored the moment
 it completes.
 
 **Entry.** Between 120 and 10 seconds before close, buy the burst side if its
-executable ask sits within `[0.15, 0.70]`. One trade per window. Bursts with
+executable ask sits within `[0.15, 0.50]`. One trade per window. Bursts with
 real upside happen almost only in the 60–120 s zone; later the book has already
-priced the side, and above 0.70 following flow measured negative.
+priced the side, and above 0.50 the burst side resolved at or below the implied
+rate in every period replayed.
 
 **Veto.** The settlement forecast — the expected closing TWAP given spot and
 the stretch about to roll out of the average — never opens a trade. It vetoes
 one: a burst against a side the forecast is at least `vetoSdMultiple`
 standard deviations sure of is not followed.
 
-**Live market.** No entry unless the market has printed a real fill in the
-last 120 seconds. Every fill the simulator ever took at a "stale" price was on
-a market Polymarket had stopped matching during a declared incident.
+**Platform status.** No entry unless status.polymarket.com reads UP. During
+incidents and maintenance (HASISSUES, UNDERMAINTENANCE) BTC Up/Down flow dries
+up and what the book shows stops meaning anything; an earlier edge in this
+project came entirely from windows inside declared incidents. The page is polled
+every 30 s, and a page that has not been read for 90 s counts as not UP. Open
+positions keep their stop and still settle.
 
-**Exit.** A stop fires when the executable bid falls to 65% of the entry price;
-otherwise the position rides to oracle resolution. The stop is always on and
-cannot be disabled. The trigger only decides *when* to sell: the order is
-matched against whatever the bid side actually holds, walked to the bottom of
-the book with no limit, so a collapsed book produces a near-total loss. A book
-too thin to absorb the whole position leaves a remainder, which stays open with
-the trigger re-armed.
+**Exit.** The stop arms when the executable bid falls to 65% of the entry price
+and fires once the bid has stayed at or below that level for `stopConfirmMs`
+(20 s); a bid back above the level resets the clock. In the final two minutes
+these books routinely wick through that level and recover: replayed over five
+days, an immediate stop fired on 81% of trades and sold 37 of 69 eventual
+winners. A dip that has not held by the window end never fires, so the latest
+entries effectively ride to resolution. Otherwise the position rides to oracle
+resolution. The stop is always on and cannot be disabled. The trigger only
+decides *when* to sell: the order is matched against whatever the bid side
+actually holds, walked to the bottom of the book with no limit, so a collapsed
+book produces a near-total loss. A book too thin to absorb the whole position
+leaves a remainder, which stays open with the trigger re-armed.
 
 **Execution.** Simulated FAK taker orders walk the real book level by level, so
 fills reflect actual depth, partial fills, slippage and fees. Orders are held
@@ -90,6 +99,14 @@ to five seconds, and it is negative above 0.70. The live run is the test. If a
 week of trades shows the burst side resolving at or below the entry price's
 implied rate, the signal is noise and this strategy should be retired, not
 tuned.
+
+A five-day replay (480 windows, 9–14 September) of the original rule reproduced
+the live account's loss and located it: entries at 0.50–0.70 lost in both halves
+of the sample, and an unconfirmed stop turned a held-to-settlement +5% per trade
+into −10%. With the 0.50 cap and the confirmed stop the same replay gives +11%
+per trade over 116 trades, similar in both halves but within one standard error
+(±15%) of zero. Copying wallets with a profitable late-window record and
+requiring distinct wallets inside a burst were both tested and rejected.
 
 ## Simulation settings
 

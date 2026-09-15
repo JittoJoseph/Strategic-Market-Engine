@@ -3,6 +3,7 @@ import { getConfig } from "./utils/config.js";
 import { FIXED_POSITION_BUDGET_USD, WINDOW_CONFIG, STRATEGY } from "./types/index.js";
 import { connectDatabase } from "./db/client.js";
 import { getBtcPriceWatcher } from "./services/btc-price-watcher.js";
+import { getPlatformStatusWatcher } from "./services/platform-status.js";
 import { getMarketClock } from "./services/market-clock.js";
 import { getMarketOrchestrator } from "./services/market-orchestrator.js";
 import { getApiServer } from "./services/api-server.js";
@@ -26,11 +27,11 @@ async function main(): Promise<void> {
       flowMinPrints: STRATEGY.flowMinPrints,
       flowBurstMs: STRATEGY.flowBurstMs,
       vetoSdMultiple: STRATEGY.vetoSdMultiple,
-      marketLivenessMs: STRATEGY.marketLivenessMs,
+      entryGate: "status.polymarket.com reads UP",
       sigmaWindowMs: STRATEGY.sigmaWindowMs,
       startingCapital: config.portfolio.startingCapital,
       positionBudget: `$${FIXED_POSITION_BUDGET_USD} fixed (simulation)`,
-      stopLoss: `${(STRATEGY.stopLossFraction * 100).toFixed(0)}% below entry (always on)`,
+      stopLoss: `${(STRATEGY.stopLossFraction * 100).toFixed(0)}% below entry, held ${STRATEGY.stopConfirmMs / 1000}s (always on)`,
     },
     "Configuration loaded",
   );
@@ -43,6 +44,10 @@ async function main(): Promise<void> {
   const btcWatcher = getBtcPriceWatcher();
   btcWatcher.start();
   logger.info("BTC price watcher started");
+
+  const platformStatus = getPlatformStatusWatcher();
+  await platformStatus.start();
+  logger.info({ status: platformStatus.getStatus().status }, "Polymarket status watcher started");
 
   const orchestrator = getMarketOrchestrator();
   await orchestrator.start();
@@ -59,6 +64,7 @@ async function main(): Promise<void> {
       apiServer.stop();
       orchestrator.stop();
       btcWatcher.stop();
+      platformStatus.stop();
     } catch (err) {
       logger.error({ err }, "Error during shutdown");
     }

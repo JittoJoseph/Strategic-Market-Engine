@@ -17,6 +17,7 @@ export const POLY_URLS = {
   CLOB_BASE: "https://clob.polymarket.com",
   CLOB_WS: "wss://ws-subscriptions-clob.polymarket.com/ws/market",
   RTDS_WS: "wss://ws-live-data.polymarket.com",
+  STATUS_SUMMARY: "https://status.polymarket.com/summary.json",
 } as const;
 
 /** https://docs.polymarket.com/trading/fees — taker fee per share = rate · p · (1 − p). */
@@ -24,12 +25,12 @@ export const CRYPTO_FEE_RATE = 0.07;
 export const POLYMARKET_MIN_ORDER_SIZE = 5;
 export const FIXED_POSITION_BUDGET_USD = 5;
 
-/** Calibrated on the 4-day tape; not deployment settings. See README. */
+/** Calibrated on tape replays; not deployment settings. See README. */
 export const STRATEGY = {
   entryWindowOpenSeconds: 120,
   entryWindowCloseSeconds: 10,
   minEntryPrice: 0.15,
-  maxEntryPrice: 0.7,
+  maxEntryPrice: 0.5,
   flowMinPrintShares: 50,
   flowMinPrints: 2,
   flowBurstMs: 3_000,
@@ -37,9 +38,11 @@ export const STRATEGY = {
   sigmaWindowMs: 180_000,
   maxRawStalenessMs: 5_000,
   stopLossFraction: 0.35,
+  stopConfirmMs: 20_000,
   executionLatencyMs: 50,
   scanIntervalMs: 60_000,
-  marketLivenessMs: 120_000,
+  statusPollMs: 30_000,
+  statusMaxAgeMs: 90_000,
 } as const;
 
 export const ConfigSchema = z.object({
